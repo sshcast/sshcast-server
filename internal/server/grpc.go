@@ -73,15 +73,20 @@ func (s *SockcastServer) Sign(ctx context.Context, req *sockcastv1.SignRequest) 
 		return nil, status.Error(codes.PermissionDenied, "relay_grant user_pubkey does not match RPC caller user_pubkey")
 	}
 
-	log.Printf("[grpc] Sign request=%s from relay=%s user=%s", req.GetRequestId(), nodeID, userID)
+	nowMs := uint64(time.Now().UnixMilli())
+	skewMs := int64(nowMs) - int64(req.GetTimestampUnixMs())
+	log.Printf("[grpc] Sign request=%s from relay=%s user=%s (relay_to_server_ms=%d)", req.GetRequestId(), nodeID, userID, skewMs)
+	tStart := time.Now()
 	resp, err := s.registry.RouteSignRequest(ctx, userID, req)
 	if err != nil {
+		log.Printf("[grpc] Sign request=%s failed after %dms: %v", req.GetRequestId(), time.Since(tStart).Milliseconds(), err)
 		return &sockcastv1.SignResponse{
 			RequestId:    req.GetRequestId(),
 			Approved:     false,
 			ErrorMessage: err.Error(),
 		}, nil
 	}
+	log.Printf("[grpc] Sign request=%s completed in %dms (approved=%v, handled_by=%s)", req.GetRequestId(), time.Since(tStart).Milliseconds(), resp.GetApproved(), resp.GetHandledByNodeId())
 	return resp, nil
 }
 

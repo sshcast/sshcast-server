@@ -312,6 +312,8 @@ func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *soc
 			continue
 		}
 
+		tPush := time.Now()
+		log.Printf("[hub] Pushed SignRequest %s to workstation %s (candidates=%d)", req.GetRequestId(), ws.NodeID, len(candidates))
 		ackTimer := time.NewTimer(r.signAckTimeout)
 		select {
 		case <-ctx.Done():
@@ -320,10 +322,11 @@ func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *soc
 		case resp := <-p.respCh:
 			ackTimer.Stop()
 			winningNodeID = resp.GetHandledByNodeId()
+			log.Printf("[hub] Immediate SignResponse received for %s from %s in %dms", req.GetRequestId(), winningNodeID, time.Since(tPush).Milliseconds())
 			return resp, nil
 		case ackNode := <-p.ackCh:
 			ackTimer.Stop()
-			log.Printf("[hub] SignAck received for request %s from workstation %s", req.GetRequestId(), ackNode)
+			log.Printf("[hub] SignAck received for request %s from workstation %s in %dms", req.GetRequestId(), ackNode, time.Since(tPush).Milliseconds())
 			acked = true
 		case <-ws.DoneCh:
 			ackTimer.Stop()
