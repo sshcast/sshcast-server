@@ -7,6 +7,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 DynamicUser=yes
+RuntimeDirectory=sockcast
 ConfigurationDirectory=sockcast
 ExecStart=/usr/bin/sockcast-server --config /etc/sockcast/server.toml
 Restart=on-failure
@@ -18,3 +19,4 @@ ProtectHome=yes
 
 [Install]
 WantedBy=multi-user.target
+Also=sockcast-server.socket

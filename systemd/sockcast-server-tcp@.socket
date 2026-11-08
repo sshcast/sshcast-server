@@ -1,0 +1,11 @@
+[Unit]
+Description=Sockcast Coordinator Server Local TCP Socket on 127.0.0.1:%i (for Cloudflare Tunnel)
+Documentation=https://github.com/theraphim/sockcast-server
+
+[Socket]
+ListenStream=127.0.0.1:%i
+Service=sockcast-server.service
+Accept=no
+
+[Install]
+WantedBy=sockets.target

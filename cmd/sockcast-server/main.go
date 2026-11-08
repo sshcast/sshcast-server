@@ -5,9 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,6 +25,8 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
+const systemdListenFDsStart = 3
+
 type stringSliceFlag []string
 
 func (s *stringSliceFlag) String() string { return strings.Join(*s, ",") }
@@ -30,10 +35,74 @@ func (s *stringSliceFlag) Set(val string) error {
 	return nil
 }
 
+// acquireSystemdListeners inspects LISTEN_FDS (and LISTEN_PID if set) and returns a net.Listener
+// for every socket file descriptor passed by systemd (starting at FD 3).
+// This allows sockcast-server to simultaneously serve any combination of sockcast-server.socket
+// (/run/sockcast/server.sock) and sockcast-server-tcp@<port>.socket (127.0.0.1:<port>).
+func acquireSystemdListeners() ([]net.Listener, error) {
+	nfdsStr := strings.TrimSpace(os.Getenv("LISTEN_FDS"))
+	if nfdsStr == "" {
+		return nil, nil
+	}
+	if pidStr := strings.TrimSpace(os.Getenv("LISTEN_PID")); pidStr != "" {
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil || pid != os.Getpid() {
+			return nil, nil
+		}
+	}
+	nfds, err := strconv.Atoi(nfdsStr)
+	if err != nil || nfds <= 0 {
+		return nil, fmt.Errorf("invalid LISTEN_FDS=%q", nfdsStr)
+	}
+
+	listeners := make([]net.Listener, 0, nfds)
+	for i := 0; i < nfds; i++ {
+		fd := systemdListenFDsStart + i
+		syscall.CloseOnExec(fd)
+		f := os.NewFile(uintptr(fd), fmt.Sprintf("systemd-listen-fd-%d", fd))
+		if f == nil {
+			for _, ln := range listeners {
+				_ = ln.Close()
+			}
+			return nil, fmt.Errorf("failed to wrap systemd file descriptor %d", fd)
+		}
+		ln, err := net.FileListener(f)
+		_ = f.Close()
+		if err != nil {
+			for _, prev := range listeners {
+				_ = prev.Close()
+			}
+			return nil, fmt.Errorf("net.FileListener on fd %d: %w", fd, err)
+		}
+		listeners = append(listeners, ln)
+	}
+	return listeners, nil
+}
+
+// acquireStandaloneListener opens a Unix domain socket (if addr starts with "unix:" or "/")
+// or a TCP listener when sockcast-server is started outside systemd socket activation.
+func acquireStandaloneListener(addr string) (net.Listener, error) {
+	trimmed := strings.TrimSpace(addr)
+	if strings.HasPrefix(trimmed, "unix:") || strings.HasPrefix(trimmed, "/") {
+		sockPath := strings.TrimPrefix(trimmed, "unix:")
+		if err := os.MkdirAll(filepath.Dir(sockPath), 0755); err != nil {
+			return nil, fmt.Errorf("mkdir socket parent %q: %w", filepath.Dir(sockPath), err)
+		}
+		_ = os.Remove(sockPath)
+		ln, err := net.Listen("unix", sockPath)
+		if err != nil {
+			return nil, err
+		}
+		_ = os.Chmod(sockPath, 0666)
+		return ln, nil
+	}
+	return net.Listen("tcp", trimmed)
+}
+
 func main() {
 	var (
 		configPath   = flag.String("config", "", "Path to server.toml configuration file")
-		listenAddr   = flag.String("listen", "", "Listen address override (e.g. 127.0.0.1:8080 or :8443)")
+		listenAddr   = flag.String("listen", "", "Listen address override when not socket-activated (e.g. unix:/run/sockcast/server.sock or 127.0.0.1:8080)")
 		tlsCertFile  = flag.String("tls-cert", "", "Optional TLS certificate file (leave empty for h2c behind Nginx/Cloudflare)")
 		tlsKeyFile   = flag.String("tls-key", "", "Optional TLS private key file")
 		allowAnyUser = flag.Bool("allow-any-user", false, "Allow any valid Ed25519 user root key without allowlist check")
@@ -101,20 +170,34 @@ func main() {
 
 	h2Server := &http2.Server{}
 	httpServer := &http.Server{
-		Addr:    cfg.ListenAddr,
 		Handler: h2c.NewHandler(mixedHandler, h2Server),
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-			log.Printf("[sockcast-server] Listening on %s (TLS + HTTP/2 gRPC)", cfg.ListenAddr)
-			errCh <- httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
-		} else {
-			log.Printf("[sockcast-server] Listening on %s (h2c HTTP/2 cleartext for Nginx/Cloudflare proxy)", cfg.ListenAddr)
-			errCh <- httpServer.ListenAndServe()
+	listeners, err := acquireSystemdListeners()
+	if err != nil {
+		log.Fatalf("Failed to acquire systemd socket-activated listeners: %v", err)
+	}
+	if len(listeners) == 0 {
+		ln, err := acquireStandaloneListener(cfg.ListenAddr)
+		if err != nil {
+			log.Fatalf("Failed to listen on %s: %v", cfg.ListenAddr, err)
 		}
-	}()
+		listeners = append(listeners, ln)
+	}
+
+	errCh := make(chan error, len(listeners))
+	for _, ln := range listeners {
+		ln := ln
+		go func() {
+			if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+				log.Printf("[sockcast-server] Listening on %s://%s (TLS + HTTP/2 gRPC)", ln.Addr().Network(), ln.Addr().String())
+				errCh <- httpServer.ServeTLS(ln, cfg.TLSCertFile, cfg.TLSKeyFile)
+			} else {
+				log.Printf("[sockcast-server] Listening on %s://%s (h2c HTTP/2 cleartext for Nginx/Cloudflare proxy)", ln.Addr().Network(), ln.Addr().String())
+				errCh <- httpServer.Serve(ln)
+			}
+		}()
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

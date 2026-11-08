@@ -30,21 +30,25 @@ go test -mod=vendor ./...
 %install
 install -D -m 0755 sockcast-server %{buildroot}%{_bindir}/sockcast-server
 install -D -m 0644 systemd/sockcast-server.service %{buildroot}%{_unitdir}/sockcast-server.service
+install -D -m 0644 systemd/sockcast-server.socket %{buildroot}%{_unitdir}/sockcast-server.socket
+install -D -m 0644 systemd/sockcast-server-tcp@.socket %{buildroot}%{_unitdir}/sockcast-server-tcp@.socket
 install -D -m 0640 systemd/server.toml %{buildroot}%{_sysconfdir}/sockcast/server.toml
 
 %post
-%systemd_post sockcast-server.service
+%systemd_post sockcast-server.socket sockcast-server.service
 
 %preun
-%systemd_preun sockcast-server.service
+%systemd_preun sockcast-server.socket sockcast-server.service
 
 %postun
-%systemd_postun_with_restart sockcast-server.service
+%systemd_postun_with_restart sockcast-server.socket sockcast-server.service
 
 %files
 %doc README.md
 %{_bindir}/sockcast-server
 %{_unitdir}/sockcast-server.service
+%{_unitdir}/sockcast-server.socket
+%{_unitdir}/sockcast-server-tcp@.socket
 %dir %attr(0750,root,root) %{_sysconfdir}/sockcast
 %config(noreplace) %{_sysconfdir}/sockcast/server.toml
 
