@@ -1,0 +1,25 @@
+# Sockcast Coordinator Server Configuration (/etc/sockcast/server.toml)
+
+# Listen address (use 127.0.0.1:8080 when running behind Nginx grpc_pass or Cloudflare tunnel)
+listen_addr = "127.0.0.1:8080"
+
+# Optional TLS certificate & key (leave empty for h2c cleartext HTTP/2 behind Nginx/Cloudflare)
+tls_cert_file = ""
+tls_key_file = ""
+
+# Set to true only for testing or private open networks; otherwise specify allowed_user_pubkeys
+allow_any_user = false
+
+# List of allowed User Root Ed25519 public keys (hex or base64 or sc_pub_... produced by sockcast-client keygen)
+allowed_user_pubkeys = [
+  # "sc_pub_..."
+]
+
+# Fast workstation receipt timeout before failing over to secondary workstation (default: 1500ms)
+sign_ack_timeout_ms = 1500
+
+# Maximum time to wait for human approval after SignAck is received (default: 60000ms)
+sign_response_timeout_ms = 60000
+
+# Interval for server-to-workstation heartbeat frames to keep Cloudflare/Nginx streams alive (default: 25000ms)
+heartbeat_interval_ms = 25000
