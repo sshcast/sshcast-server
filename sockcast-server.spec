@@ -22,10 +22,10 @@ hosts (sockcast-relay) and user workstations (sockcast-client) over HTTP/2
 %autosetup -n %{name}-%{version}
 
 %build
-go build -mod=vendor -trimpath -ldflags="-s -w" -o sockcast-server ./cmd/sockcast-server
+go build -mod=readonly -trimpath -ldflags="-s -w" -o sockcast-server ./cmd/sockcast-server
 
 %check
-go test -mod=vendor ./...
+go test -mod=readonly ./...
 
 %install
 install -D -m 0755 sockcast-server %{buildroot}%{_bindir}/sockcast-server

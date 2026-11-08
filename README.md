@@ -58,7 +58,7 @@ ingress:
 
 ```bash
 # Run tests
-go test -mod=vendor ./...
+go test ./...
 
 # Build Fedora RPM via tito
 tito build --test --rpm
