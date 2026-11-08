@@ -1,4 +1,4 @@
 /sockcast-server
-/vendor/
 *.rpm
 *.src.rpm
+
