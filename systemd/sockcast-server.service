@@ -7,7 +7,9 @@ Wants=network-online.target sockcast-server.socket
 [Service]
 Type=simple
 DynamicUser=yes
-ExecStart=/usr/bin/sockcast-server --config /etc/sockcast/server.toml
+ConfigurationDirectory=sockcast::ro
+ConfigurationDirectoryMode=0755
+ExecStart=/usr/bin/sockcast-server --config ${CONFIGURATION_DIRECTORY}/server.toml
 Restart=on-failure
 RestartSec=2s
 NoNewPrivileges=yes

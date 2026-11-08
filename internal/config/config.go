@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -40,6 +41,14 @@ func Default() *Config {
 
 func Load(path string) (*Config, error) {
 	cfg := Default()
+	if path == "" {
+		if confDir := strings.TrimSpace(os.Getenv("CONFIGURATION_DIRECTORY")); confDir != "" {
+			candidate := filepath.Join(strings.Split(confDir, ":")[0], "server.toml")
+			if _, err := os.Stat(candidate); err == nil {
+				path = candidate
+			}
+		}
+	}
 	if path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
