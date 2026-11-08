@@ -1,14 +1,12 @@
 [Unit]
 Description=Sockcast Coordinator Server (Roaming SSH Agent Router)
 Documentation=https://github.com/theraphim/sockcast-server
-After=network-online.target
-Wants=network-online.target
+After=network-online.target sockcast-server.socket
+Wants=network-online.target sockcast-server.socket
 
 [Service]
 Type=simple
 DynamicUser=yes
-RuntimeDirectory=sockcast
-ConfigurationDirectory=sockcast
 ExecStart=/usr/bin/sockcast-server --config /etc/sockcast/server.toml
 Restart=on-failure
 RestartSec=2s

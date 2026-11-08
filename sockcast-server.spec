@@ -32,9 +32,11 @@ install -D -m 0755 sockcast-server %{buildroot}%{_bindir}/sockcast-server
 install -D -m 0644 systemd/sockcast-server.service %{buildroot}%{_unitdir}/sockcast-server.service
 install -D -m 0644 systemd/sockcast-server.socket %{buildroot}%{_unitdir}/sockcast-server.socket
 install -D -m 0644 systemd/sockcast-server-tcp@.socket %{buildroot}%{_unitdir}/sockcast-server-tcp@.socket
-install -D -m 0640 systemd/server.toml %{buildroot}%{_sysconfdir}/sockcast/server.toml
+install -D -m 0644 systemd/server.toml %{buildroot}%{_sysconfdir}/sockcast/server.toml
 
 %post
+chmod 0755 %{_sysconfdir}/sockcast 2>/dev/null || :
+chmod 0644 %{_sysconfdir}/sockcast/server.toml 2>/dev/null || :
 %systemd_post sockcast-server.socket sockcast-server.service
 
 %preun
@@ -49,8 +51,8 @@ install -D -m 0640 systemd/server.toml %{buildroot}%{_sysconfdir}/sockcast/serve
 %{_unitdir}/sockcast-server.service
 %{_unitdir}/sockcast-server.socket
 %{_unitdir}/sockcast-server-tcp@.socket
-%dir %attr(0750,root,root) %{_sysconfdir}/sockcast
-%config(noreplace) %{_sysconfdir}/sockcast/server.toml
+%dir %attr(0755,root,root) %{_sysconfdir}/sockcast
+%attr(0644,root,root) %config(noreplace) %{_sysconfdir}/sockcast/server.toml
 
 %changelog
 * Sun Nov 08 2026 Paul Komkoff <i@stingr.net> - 0.1.0-1
