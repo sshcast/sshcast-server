@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +46,31 @@ func (ws *WorkstationSession) TrySend(msg *sockcastv1.ServerStreamMessage) bool 
 	}
 }
 
+type RelaySession struct {
+	UserID      string
+	NodeID      string
+	ConnectedAt time.Time
+	Status      *sockcastv1.RelayZellijStatus
+	SendCh      chan *sockcastv1.ServerToRelayMessage
+	DoneCh      chan struct{}
+}
+
+func (rs *RelaySession) TrySend(msg *sockcastv1.ServerToRelayMessage) bool {
+	select {
+	case <-rs.DoneCh:
+		return false
+	default:
+	}
+	select {
+	case rs.SendCh <- msg:
+		return true
+	case <-rs.DoneCh:
+		return false
+	default:
+		return false
+	}
+}
+
 type pendingSignRequest struct {
 	req              *sockcastv1.SignRequest
 	ackCh            chan string
@@ -58,6 +84,7 @@ type UserHub struct {
 	userID       string
 	cachedKeys   []*sockcastv1.PublicKey
 	workstations map[string]*WorkstationSession
+	relays       map[string]*RelaySession
 	pending      map[string]*pendingSignRequest
 }
 
@@ -65,6 +92,7 @@ func newUserHub(userID string) *UserHub {
 	return &UserHub{
 		userID:       userID,
 		workstations: make(map[string]*WorkstationSession),
+		relays:       make(map[string]*RelaySession),
 		pending:      make(map[string]*pendingSignRequest),
 	}
 }
@@ -110,7 +138,7 @@ func (r *Registry) RegisterWorkstation(userID, nodeID string) *WorkstationSessio
 		UserID:      userID,
 		NodeID:      nodeID,
 		ConnectedAt: time.Now(),
-		SendCh:      make(chan *sockcastv1.ServerStreamMessage, 64),
+		SendCh:      make(chan *sockcastv1.ServerStreamMessage, 256),
 		DoneCh:      make(chan struct{}),
 	}
 	uh.workstations[nodeID] = ws
@@ -359,4 +387,201 @@ func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *soc
 	case <-approvalTimer.C:
 		return nil, ErrSignApprovalTimedOut
 	}
+}
+
+// RegisterRelay registers a connected relay stream (Zellij service enabled) for userID.
+func (r *Registry) RegisterRelay(userID, nodeID string) *RelaySession {
+	uh := r.getOrCreateUserHub(userID)
+	uh.mu.Lock()
+	defer uh.mu.Unlock()
+
+	if old, exists := uh.relays[nodeID]; exists {
+		close(old.DoneCh)
+	}
+
+	rs := &RelaySession{
+		UserID:      userID,
+		NodeID:      nodeID,
+		ConnectedAt: time.Now(),
+		SendCh:      make(chan *sockcastv1.ServerToRelayMessage, 256),
+		DoneCh:      make(chan struct{}),
+	}
+	uh.relays[nodeID] = rs
+	return rs
+}
+
+// UnregisterRelay removes the relay session if it matches rs and broadcasts the updated ZellijHostList.
+func (r *Registry) UnregisterRelay(rs *RelaySession) {
+	uh := r.getOrCreateUserHub(rs.UserID)
+	uh.mu.Lock()
+	defer uh.mu.Unlock()
+
+	current, exists := uh.relays[rs.NodeID]
+	if exists && current == rs {
+		delete(uh.relays, rs.NodeID)
+		select {
+		case <-rs.DoneCh:
+		default:
+			close(rs.DoneCh)
+		}
+		uh.broadcastZellijHostListLocked()
+	}
+}
+
+func (uh *UserHub) buildZellijHostListLocked() *sockcastv1.ZellijHostList {
+	hosts := make([]*sockcastv1.RelayZellijStatus, 0, len(uh.relays))
+	for _, rs := range uh.relays {
+		if rs.Status != nil && rs.Status.GetZellijEnabled() {
+			hosts = append(hosts, rs.Status)
+		}
+	}
+	sort.Slice(hosts, func(i, j int) bool {
+		return hosts[i].GetNodeId() < hosts[j].GetNodeId()
+	})
+	return &sockcastv1.ZellijHostList{Hosts: hosts}
+}
+
+func (uh *UserHub) broadcastZellijHostListLocked() {
+	list := uh.buildZellijHostListLocked()
+	msg := &sockcastv1.ServerStreamMessage{
+		Payload: &sockcastv1.ServerStreamMessage_ZellijHostList{
+			ZellijHostList: list,
+		},
+	}
+	for _, ws := range uh.workstations {
+		ws.TrySend(msg)
+	}
+}
+
+// UpdateRelayZellijStatus updates the Zellij session discovery status for a connected relay and notifies workstations.
+func (r *Registry) UpdateRelayZellijStatus(rs *RelaySession, status *sockcastv1.RelayZellijStatus) {
+	if status == nil {
+		return
+	}
+	uh := r.getOrCreateUserHub(rs.UserID)
+	uh.mu.Lock()
+	defer uh.mu.Unlock()
+
+	clonedSessions := make([]*sockcastv1.ZellijSessionInfo, len(status.GetSessions()))
+	copy(clonedSessions, status.GetSessions())
+	rs.Status = &sockcastv1.RelayZellijStatus{
+		NodeId:          rs.NodeID,
+		ZellijEnabled:   status.GetZellijEnabled(),
+		Sessions:        clonedSessions,
+		UpdatedAtUnixMs: status.GetUpdatedAtUnixMs(),
+	}
+	uh.broadcastZellijHostListLocked()
+}
+
+// SendZellijHostsToWorkstation sends the current ZellijHostList to ws and optionally asks connected relays to refresh.
+func (r *Registry) SendZellijHostsToWorkstation(ws *WorkstationSession, askRelaysToRefresh bool) {
+	uh := r.getOrCreateUserHub(ws.UserID)
+	uh.mu.Lock()
+	defer uh.mu.Unlock()
+
+	list := uh.buildZellijHostListLocked()
+	if askRelaysToRefresh || len(list.GetHosts()) > 0 {
+		ws.TrySend(&sockcastv1.ServerStreamMessage{
+			Payload: &sockcastv1.ServerStreamMessage_ZellijHostList{
+				ZellijHostList: list,
+			},
+		})
+	}
+
+	if askRelaysToRefresh {
+		refreshMsg := &sockcastv1.ServerToRelayMessage{
+			Payload: &sockcastv1.ServerToRelayMessage_RefreshSessions{
+				RefreshSessions: true,
+			},
+		}
+		for _, rs := range uh.relays {
+			rs.TrySend(refreshMsg)
+		}
+	}
+}
+
+func shortHostLabel(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if idx := strings.IndexByte(s, '.'); idx > 0 {
+		return s[:idx]
+	}
+	return s
+}
+
+func (uh *UserHub) findRelayLocked(target string) *RelaySession {
+	if rs, ok := uh.relays[target]; ok {
+		return rs
+	}
+	targetLower := strings.ToLower(strings.TrimSpace(target))
+	for _, rs := range uh.relays {
+		if strings.EqualFold(rs.NodeID, targetLower) {
+			return rs
+		}
+	}
+	targetShort := shortHostLabel(targetLower)
+	for _, rs := range uh.relays {
+		if shortHostLabel(rs.NodeID) == targetShort {
+			return rs
+		}
+	}
+	return nil
+}
+
+// RouteZellijFrameFromClient routes a ZellijTunnelFrame from a workstation to the target relay.
+func (r *Registry) RouteZellijFrameFromClient(userID, clientNodeID string, frame *sockcastv1.ZellijTunnelFrame) {
+	if frame == nil {
+		return
+	}
+	uh := r.getOrCreateUserHub(userID)
+	uh.mu.Lock()
+	defer uh.mu.Unlock()
+
+	frame.ClientNodeId = clientNodeID
+	rs := uh.findRelayLocked(frame.GetRelayNodeId())
+	if rs == nil {
+		if frame.GetFrameType() == sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_OPEN {
+			if ws, ok := uh.workstations[clientNodeID]; ok {
+				ws.TrySend(&sockcastv1.ServerStreamMessage{
+					Payload: &sockcastv1.ServerStreamMessage_ZellijFrame{
+						ZellijFrame: &sockcastv1.ZellijTunnelFrame{
+							TunnelId:     frame.GetTunnelId(),
+							RelayNodeId:  frame.GetRelayNodeId(),
+							ClientNodeId: clientNodeID,
+							FrameType:    sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_CLOSE,
+							ErrorMessage: fmt.Sprintf("relay %q is not online with Zellij enabled", frame.GetRelayNodeId()),
+						},
+					},
+				})
+			}
+		}
+		return
+	}
+
+	frame.RelayNodeId = rs.NodeID
+	rs.TrySend(&sockcastv1.ServerToRelayMessage{
+		Payload: &sockcastv1.ServerToRelayMessage_ZellijFrame{
+			ZellijFrame: frame,
+		},
+	})
+}
+
+// RouteZellijFrameFromRelay routes a ZellijTunnelFrame from a relay to the target workstation.
+func (r *Registry) RouteZellijFrameFromRelay(userID, relayNodeID string, frame *sockcastv1.ZellijTunnelFrame) {
+	if frame == nil {
+		return
+	}
+	uh := r.getOrCreateUserHub(userID)
+	uh.mu.Lock()
+	defer uh.mu.Unlock()
+
+	frame.RelayNodeId = relayNodeID
+	ws, ok := uh.workstations[frame.GetClientNodeId()]
+	if !ok {
+		return
+	}
+	ws.TrySend(&sockcastv1.ServerStreamMessage{
+		Payload: &sockcastv1.ServerStreamMessage_ZellijFrame{
+			ZellijFrame: frame,
+		},
+	})
 }

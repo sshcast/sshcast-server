@@ -122,6 +122,9 @@ func (s *SockcastServer) ConnectWorkstation(stream grpc.BidiStreamingServer[sock
 		return err
 	}
 
+	// Also push initial ZellijHostList to the newly connected workstation.
+	s.registry.SendZellijHostsToWorkstation(ws, false)
+
 	sendErrCh := make(chan error, 1)
 	go func() {
 		ticker := time.NewTicker(s.cfg.HeartbeatInterval())
@@ -178,6 +181,99 @@ func (s *SockcastServer) ConnectWorkstation(stream grpc.BidiStreamingServer[sock
 			s.registry.HandleSignAck(userID, nodeID, p.SignAck)
 		case *sockcastv1.ClientStreamMessage_SignResponse:
 			s.registry.HandleSignResponse(userID, nodeID, p.SignResponse)
+		case *sockcastv1.ClientStreamMessage_RequestZellijHosts:
+			s.registry.SendZellijHostsToWorkstation(ws, p.RequestZellijHosts)
+		case *sockcastv1.ClientStreamMessage_ZellijFrame:
+			s.registry.RouteZellijFrameFromClient(userID, nodeID, p.ZellijFrame)
+		}
+	}
+}
+
+func (s *SockcastServer) ConnectRelay(stream grpc.BidiStreamingServer[sockcastv1.RelayStreamMessage, sockcastv1.ServerToRelayMessage]) error {
+	firstMsg, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	handshake := firstMsg.GetAuthHandshake()
+	if handshake == nil {
+		return status.Error(codes.Unauthenticated, "first message on ConnectRelay stream must be auth_handshake")
+	}
+
+	userID, nodeID, _, err := s.verifyCaller(handshake, sockcastv1.NodeRole_NODE_ROLE_RELAY)
+	if err != nil {
+		return err
+	}
+
+	rs := s.registry.RegisterRelay(userID, nodeID)
+	defer func() {
+		s.registry.UnregisterRelay(rs)
+		log.Printf("[grpc] Relay Zellij stream disconnected: node=%s user=%s", nodeID, userID)
+	}()
+
+	log.Printf("[grpc] Relay Zellij stream connected: node=%s user=%s", nodeID, userID)
+
+	if err := stream.Send(&sockcastv1.ServerToRelayMessage{
+		Payload: &sockcastv1.ServerToRelayMessage_ServerHeartbeatEpochMs{
+			ServerHeartbeatEpochMs: uint64(time.Now().UnixMilli()),
+		},
+	}); err != nil {
+		return err
+	}
+
+	sendErrCh := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(s.cfg.HeartbeatInterval())
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-stream.Context().Done():
+				return
+			case <-rs.DoneCh:
+				return
+			case msg := <-rs.SendCh:
+				if err := stream.Send(msg); err != nil {
+					select {
+					case sendErrCh <- err:
+					default:
+					}
+					return
+				}
+			case t := <-ticker.C:
+				if err := stream.Send(&sockcastv1.ServerToRelayMessage{
+					Payload: &sockcastv1.ServerToRelayMessage_ServerHeartbeatEpochMs{
+						ServerHeartbeatEpochMs: uint64(t.UnixMilli()),
+					},
+				}); err != nil {
+					select {
+					case sendErrCh <- err:
+					default:
+					}
+					return
+				}
+			}
+		}
+	}()
+
+	for {
+		msg, recvErr := stream.Recv()
+		if recvErr != nil {
+			if recvErr == io.EOF {
+				return nil
+			}
+			select {
+			case sErr := <-sendErrCh:
+				return sErr
+			default:
+				return recvErr
+			}
+		}
+
+		switch p := msg.GetPayload().(type) {
+		case *sockcastv1.RelayStreamMessage_ZellijStatus:
+			s.registry.UpdateRelayZellijStatus(rs, p.ZellijStatus)
+		case *sockcastv1.RelayStreamMessage_ZellijFrame:
+			s.registry.RouteZellijFrameFromRelay(userID, nodeID, p.ZellijFrame)
 		}
 	}
 }

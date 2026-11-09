@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/BurntSushi/toml v1.5.0
-	github.com/theraphim/sockcast-proto v0.1.0
+	github.com/theraphim/sockcast-proto v0.1.1
 	golang.org/x/net v0.60.0
 	google.golang.org/grpc v1.85.0
 )

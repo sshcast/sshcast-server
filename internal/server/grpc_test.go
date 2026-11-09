@@ -221,3 +221,133 @@ func TestSignAckFailoverAndIdentities(t *testing.T) {
 	}
 	_ = userPub
 }
+
+func TestZellijHostDiscoveryAndTunnelRouting(t *testing.T) {
+	_, userPriv := keypair(0x40)
+	wsPub, wsPriv := keypair(0x41)
+	relayPub, relayPriv := keypair(0x42)
+
+	cfg := config.Default()
+	cfg.AllowAnyUser = true
+	reg := hub.NewRegistry(cfg.SignAckTimeout(), cfg.SignResponseTimeout())
+	srv := New(cfg, reg)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	sockcastv1.RegisterSockcastServiceServer(grpcServer, srv)
+	go func() {
+		_ = grpcServer.Serve(lis)
+	}()
+	defer grpcServer.Stop()
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer conn.Close()
+	client := sockcastv1.NewSockcastServiceClient(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 1. Connect Workstation
+	_, wsAuth := makeSignedGrantAndAuth(t, userPriv, wsPub, wsPriv, "workstation-1", sockcastv1.NodeRole_NODE_ROLE_CLIENT)
+	wsStream, err := client.ConnectWorkstation(ctx)
+	if err != nil {
+		t.Fatalf("ConnectWorkstation: %v", err)
+	}
+	if err := wsStream.Send(&sockcastv1.ClientStreamMessage{
+		Payload: &sockcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: wsAuth},
+	}); err != nil {
+		t.Fatalf("wsStream Send handshake: %v", err)
+	}
+	if _, err := wsStream.Recv(); err != nil {
+		t.Fatalf("wsStream Recv heartbeat: %v", err)
+	}
+
+	// 2. Connect Relay with Zellij enabled
+	_, relayAuth := makeSignedGrantAndAuth(t, userPriv, relayPub, relayPriv, "sunduk.infra.local", sockcastv1.NodeRole_NODE_ROLE_RELAY)
+	relayStream, err := client.ConnectRelay(ctx)
+	if err != nil {
+		t.Fatalf("ConnectRelay: %v", err)
+	}
+	if err := relayStream.Send(&sockcastv1.RelayStreamMessage{
+		Payload: &sockcastv1.RelayStreamMessage_AuthHandshake{AuthHandshake: relayAuth},
+	}); err != nil {
+		t.Fatalf("relayStream Send handshake: %v", err)
+	}
+	if _, err := relayStream.Recv(); err != nil {
+		t.Fatalf("relayStream Recv heartbeat: %v", err)
+	}
+
+	// 3. Relay publishes ZellijStatus -> Workstation automatically receives ZellijHostList
+	if err := relayStream.Send(&sockcastv1.RelayStreamMessage{
+		Payload: &sockcastv1.RelayStreamMessage_ZellijStatus{
+			ZellijStatus: &sockcastv1.RelayZellijStatus{
+				NodeId:        "sunduk.infra.local",
+				ZellijEnabled: true,
+				Sessions: []*sockcastv1.ZellijSessionInfo{
+					{Name: "dev", CreatedInfo: "10m ago", Exited: false},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("relayStream Send ZellijStatus: %v", err)
+	}
+
+	wsMsg, err := wsStream.Recv()
+	if err != nil || wsMsg.GetZellijHostList() == nil {
+		t.Fatalf("expected ZellijHostList on wsStream, got %+v, err=%v", wsMsg, err)
+	}
+	hosts := wsMsg.GetZellijHostList().GetHosts()
+	if len(hosts) != 1 || hosts[0].GetNodeId() != "sunduk.infra.local" || len(hosts[0].GetSessions()) != 1 {
+		t.Fatalf("unexpected ZellijHostList: %+v", hosts)
+	}
+
+	// 4. Workstation routes a ZellijTunnelFrame using short hostname "sunduk" -> Relay receives it
+	if err := wsStream.Send(&sockcastv1.ClientStreamMessage{
+		Payload: &sockcastv1.ClientStreamMessage_ZellijFrame{
+			ZellijFrame: &sockcastv1.ZellijTunnelFrame{
+				TunnelId:    "stream-1",
+				RelayNodeId: "sunduk",
+				FrameType:   sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_OPEN,
+				Payload:     []byte("GET /dev HTTP/1.1\r\n\r\n"),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("wsStream Send ZellijFrame: %v", err)
+	}
+
+	relayMsg, err := relayStream.Recv()
+	if err != nil || relayMsg.GetZellijFrame() == nil {
+		t.Fatalf("expected ZellijFrame on relayStream, got %+v, err=%v", relayMsg, err)
+	}
+	if relayMsg.GetZellijFrame().GetClientNodeId() != "workstation-1" || string(relayMsg.GetZellijFrame().GetPayload()) != "GET /dev HTTP/1.1\r\n\r\n" {
+		t.Fatalf("unexpected relay ZellijFrame: %+v", relayMsg.GetZellijFrame())
+	}
+
+	// 5. Relay replies with DATA frame -> Workstation receives it
+	if err := relayStream.Send(&sockcastv1.RelayStreamMessage{
+		Payload: &sockcastv1.RelayStreamMessage_ZellijFrame{
+			ZellijFrame: &sockcastv1.ZellijTunnelFrame{
+				TunnelId:     "stream-1",
+				ClientNodeId: "workstation-1",
+				FrameType:    sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_DATA,
+				Payload:      []byte("HTTP/1.1 200 OK\r\n\r\n"),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("relayStream Send reply ZellijFrame: %v", err)
+	}
+
+	wsReply, err := wsStream.Recv()
+	if err != nil || wsReply.GetZellijFrame() == nil {
+		t.Fatalf("expected reply ZellijFrame on wsStream, got %+v, err=%v", wsReply, err)
+	}
+	if string(wsReply.GetZellijFrame().GetPayload()) != "HTTP/1.1 200 OK\r\n\r\n" {
+		t.Fatalf("unexpected wsReply data: %q", string(wsReply.GetZellijFrame().GetPayload()))
+	}
+}
