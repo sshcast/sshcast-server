@@ -46,6 +46,17 @@ func (ws *WorkstationSession) TrySend(msg *sockcastv1.ServerStreamMessage) bool 
 	}
 }
 
+func (ws *WorkstationSession) SendReliable(msg *sockcastv1.ServerStreamMessage) bool {
+	select {
+	case ws.SendCh <- msg:
+		return true
+	case <-ws.DoneCh:
+		return false
+	case <-time.After(10 * time.Second):
+		return false
+	}
+}
+
 type RelaySession struct {
 	UserID      string
 	NodeID      string
@@ -67,6 +78,17 @@ func (rs *RelaySession) TrySend(msg *sockcastv1.ServerToRelayMessage) bool {
 	case <-rs.DoneCh:
 		return false
 	default:
+		return false
+	}
+}
+
+func (rs *RelaySession) SendReliable(msg *sockcastv1.ServerToRelayMessage) bool {
+	select {
+	case rs.SendCh <- msg:
+		return true
+	case <-rs.DoneCh:
+		return false
+	case <-time.After(10 * time.Second):
 		return false
 	}
 }
@@ -138,7 +160,7 @@ func (r *Registry) RegisterWorkstation(userID, nodeID string) *WorkstationSessio
 		UserID:      userID,
 		NodeID:      nodeID,
 		ConnectedAt: time.Now(),
-		SendCh:      make(chan *sockcastv1.ServerStreamMessage, 256),
+		SendCh:      make(chan *sockcastv1.ServerStreamMessage, 2048),
 		DoneCh:      make(chan struct{}),
 	}
 	uh.workstations[nodeID] = ws
@@ -403,7 +425,7 @@ func (r *Registry) RegisterRelay(userID, nodeID string) *RelaySession {
 		UserID:      userID,
 		NodeID:      nodeID,
 		ConnectedAt: time.Now(),
-		SendCh:      make(chan *sockcastv1.ServerToRelayMessage, 256),
+		SendCh:      make(chan *sockcastv1.ServerToRelayMessage, 2048),
 		DoneCh:      make(chan struct{}),
 	}
 	uh.relays[nodeID] = rs
@@ -534,31 +556,30 @@ func (r *Registry) RouteZellijFrameFromClient(userID, clientNodeID string, frame
 	}
 	uh := r.getOrCreateUserHub(userID)
 	uh.mu.Lock()
-	defer uh.mu.Unlock()
-
 	frame.ClientNodeId = clientNodeID
 	rs := uh.findRelayLocked(frame.GetRelayNodeId())
 	if rs == nil {
-		if frame.GetFrameType() == sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_OPEN {
-			if ws, ok := uh.workstations[clientNodeID]; ok {
-				ws.TrySend(&sockcastv1.ServerStreamMessage{
-					Payload: &sockcastv1.ServerStreamMessage_ZellijFrame{
-						ZellijFrame: &sockcastv1.ZellijTunnelFrame{
-							TunnelId:     frame.GetTunnelId(),
-							RelayNodeId:  frame.GetRelayNodeId(),
-							ClientNodeId: clientNodeID,
-							FrameType:    sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_CLOSE,
-							ErrorMessage: fmt.Sprintf("relay %q is not online with Zellij enabled", frame.GetRelayNodeId()),
-						},
+		ws := uh.workstations[clientNodeID]
+		uh.mu.Unlock()
+		if frame.GetFrameType() == sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_OPEN && ws != nil {
+			ws.SendReliable(&sockcastv1.ServerStreamMessage{
+				Payload: &sockcastv1.ServerStreamMessage_ZellijFrame{
+					ZellijFrame: &sockcastv1.ZellijTunnelFrame{
+						TunnelId:     frame.GetTunnelId(),
+						RelayNodeId:  frame.GetRelayNodeId(),
+						ClientNodeId: clientNodeID,
+						FrameType:    sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_CLOSE,
+						ErrorMessage: fmt.Sprintf("relay %q is not online with Zellij enabled", frame.GetRelayNodeId()),
 					},
-				})
-			}
+				},
+			})
 		}
 		return
 	}
 
 	frame.RelayNodeId = rs.NodeID
-	rs.TrySend(&sockcastv1.ServerToRelayMessage{
+	uh.mu.Unlock()
+	rs.SendReliable(&sockcastv1.ServerToRelayMessage{
 		Payload: &sockcastv1.ServerToRelayMessage_ZellijFrame{
 			ZellijFrame: frame,
 		},
@@ -572,14 +593,13 @@ func (r *Registry) RouteZellijFrameFromRelay(userID, relayNodeID string, frame *
 	}
 	uh := r.getOrCreateUserHub(userID)
 	uh.mu.Lock()
-	defer uh.mu.Unlock()
-
 	frame.RelayNodeId = relayNodeID
 	ws, ok := uh.workstations[frame.GetClientNodeId()]
+	uh.mu.Unlock()
 	if !ok {
 		return
 	}
-	ws.TrySend(&sockcastv1.ServerStreamMessage{
+	ws.SendReliable(&sockcastv1.ServerStreamMessage{
 		Payload: &sockcastv1.ServerStreamMessage_ZellijFrame{
 			ZellijFrame: frame,
 		},
