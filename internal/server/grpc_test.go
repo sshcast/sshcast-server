@@ -4,7 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,8 +20,12 @@ import (
 	"github.com/theraphim/sockcast-proto/pkg/auth"
 	"github.com/theraphim/sockcast-server/internal/config"
 	"github.com/theraphim/sockcast-server/internal/hub"
+	"github.com/theraphim/sockcast-server/internal/wasmengine"
+	"github.com/theraphim/sockcast-server/internal/web"
+	"golang.org/x/net/websocket"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 func keypair(seedByte byte) (ed25519.PublicKey, ed25519.PrivateKey) {
@@ -349,5 +361,219 @@ func TestZellijHostDiscoveryAndTunnelRouting(t *testing.T) {
 	}
 	if string(wsReply.GetZellijFrame().GetPayload()) != "HTTP/1.1 200 OK\r\n\r\n" {
 		t.Fatalf("unexpected wsReply data: %q", string(wsReply.GetZellijFrame().GetPayload()))
+	}
+}
+
+func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
+	_, userPriv := keypair(0x60)
+	wsPub, wsPriv := keypair(0x61)
+	relayPub, relayPriv := keypair(0x62)
+
+	cfg := config.Default()
+	cfg.AllowAnyUser = true
+	reg := hub.NewRegistry(cfg.SignAckTimeout(), cfg.SignResponseTimeout())
+	srv := New(cfg, reg)
+
+	// Start gRPC server for relay
+	grpcLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen gRPC: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	sockcastv1.RegisterSockcastServiceServer(grpcServer, srv)
+	go func() {
+		_ = grpcServer.Serve(grpcLis)
+	}()
+	defer grpcServer.Stop()
+
+	// Start HTTP server with /ws/workstation and /web/
+	mux := http.NewServeMux()
+	mux.Handle("/ws/workstation", srv.WorkstationWebSocketHandler())
+	mux.Handle("/web/", web.Handler(""))
+	httpSrv := httptest.NewServer(mux)
+	defer httpSrv.Close()
+
+	// 1. Verify /web/ serves index.html, app.js, and sockcast_wasm.wasm
+	respIndex, err := http.Get(httpSrv.URL + "/web/")
+	if err != nil || respIndex.StatusCode != http.StatusOK {
+		t.Fatalf("GET /web/ failed: status=%v err=%v", respIndex, err)
+	}
+	_ = respIndex.Body.Close()
+
+	respWasm, err := http.Get(httpSrv.URL + "/web/sockcast_wasm.wasm")
+	if err != nil || respWasm.StatusCode != http.StatusOK {
+		t.Fatalf("GET /web/sockcast_wasm.wasm failed: status=%v err=%v", respWasm, err)
+	}
+	if ct := respWasm.Header.Get("Content-Type"); ct != "application/wasm" {
+		t.Fatalf("expected Content-Type application/wasm, got %q", ct)
+	}
+	_ = respWasm.Body.Close()
+
+	// 2. Build an sc1_ client enrollment bundle and load an encrypted ssh-keygen key into wasmengine
+	wsGrant, _ := makeSignedGrantAndAuth(t, userPriv, wsPub, wsPriv, "chrome-wasm-node", sockcastv1.NodeRole_NODE_ROLE_CLIENT)
+	grantBytes, err := proto.Marshal(wsGrant)
+	if err != nil {
+		t.Fatalf("proto.Marshal grant: %v", err)
+	}
+	wireJSON, err := json.Marshal(map[string]any{
+		"servers":               []string{httpSrv.URL},
+		"node_privkey_seed_b64": base64.RawURLEncoding.EncodeToString(wsPriv.Seed()),
+		"grant_proto_b64":       base64.RawURLEncoding.EncodeToString(grantBytes),
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal bundle wire: %v", err)
+	}
+	bundleToken := "sc1_" + base64.RawURLEncoding.EncodeToString(wireJSON)
+
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "id_ed25519_wasm")
+	cmd := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-a", "4", "-Z", "aes256-ctr", "-N", "wasm-pass-123", "-C", "browser@chrome", "-f", keyPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen failed: %v: %s", err, string(out))
+	}
+	pemBytes, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("ReadFile keyPath: %v", err)
+	}
+
+	eng := wasmengine.NewEngine()
+	callWasm := func(req map[string]any) map[string]any {
+		t.Helper()
+		b, _ := json.Marshal(req)
+		outStr := eng.CallJSON(string(b))
+		var resp map[string]any
+		if err := json.Unmarshal([]byte(outStr), &resp); err != nil {
+			t.Fatalf("Unmarshal wasm response: %v (%s)", err, outStr)
+		}
+		return resp
+	}
+
+	rBundle := callWasm(map[string]any{
+		"op":           "set_bundle",
+		"bundle_str":   bundleToken,
+		"now_unix_sec": time.Now().Unix(),
+	})
+	if rBundle["ok"] != true {
+		t.Fatalf("set_bundle failed: %+v", rBundle)
+	}
+
+	rKey := callWasm(map[string]any{
+		"op":         "add_ssh_key",
+		"pem":        string(pemBytes),
+		"passphrase": "wasm-pass-123",
+	})
+	if rKey["ok"] != true {
+		t.Fatalf("add_ssh_key failed: %+v", rKey)
+	}
+
+	// 3. Connect Browser WASM Workstation over WebSocket (/ws/workstation)
+	wsURL := "ws://" + strings.TrimPrefix(httpSrv.URL, "http://") + "/ws/workstation"
+	wsConn, err := websocket.Dial(wsURL, "", httpSrv.URL)
+	if err != nil {
+		t.Fatalf("websocket.Dial: %v", err)
+	}
+	defer wsConn.Close()
+
+	sendFrameB64 := func(b64 string) {
+		t.Helper()
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			t.Fatalf("DecodeString frame_b64: %v", err)
+		}
+		if err := websocket.Message.Send(wsConn, raw); err != nil {
+			t.Fatalf("websocket.Message.Send: %v", err)
+		}
+	}
+
+	rHS := callWasm(map[string]any{
+		"op":          "build_auth_handshake_frame",
+		"now_unix_ms": time.Now().UnixMilli(),
+	})
+	sendFrameB64(rHS["frame_b64"].(string))
+
+	rStatus := callWasm(map[string]any{
+		"op":                  "build_status_frame",
+		"last_input_epoch_ms": time.Now().UnixMilli(),
+		"force_active":        true,
+	})
+	sendFrameB64(rStatus["frame_b64"].(string))
+
+	// Background browser WebSocket receive loop (auto-approving SignRequest via wasmengine)
+	go func() {
+		for {
+			var raw []byte
+			if err := websocket.Message.Receive(wsConn, &raw); err != nil {
+				return
+			}
+			decoded := callWasm(map[string]any{
+				"op":           "decode_server_frame",
+				"frame_b64":    base64.StdEncoding.EncodeToString(raw),
+				"now_unix_sec": time.Now().Unix(),
+			})
+			if decoded["frame_type"] == "sign_request" {
+				sendFrameB64(decoded["ack_frame_b64"].(string))
+				reqInfo := decoded["request"].(map[string]any)
+				reqID := reqInfo["request_id"].(string)
+				dec := callWasm(map[string]any{
+					"op":         "decide_sign_request",
+					"request_id": reqID,
+					"approved":   true,
+				})
+				sendFrameB64(dec["frame_b64"].(string))
+				return
+			}
+		}
+	}()
+
+	time.Sleep(40 * time.Millisecond)
+
+	// 4. Connect Relay via gRPC, call GetIdentities and Sign
+	grpcConn, err := grpc.NewClient(grpcLis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	defer grpcConn.Close()
+	relayClient := sockcastv1.NewSockcastServiceClient(grpcConn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	relayGrant, relayAuth := makeSignedGrantAndAuth(t, userPriv, relayPub, relayPriv, "bastion.infra.local", sockcastv1.NodeRole_NODE_ROLE_RELAY)
+	idResp, err := relayClient.GetIdentities(ctx, &sockcastv1.GetIdentitiesRequest{Auth: relayAuth})
+	if err != nil {
+		t.Fatalf("GetIdentities: %v", err)
+	}
+	if len(idResp.GetKeys()) != 1 || idResp.GetKeys()[0].GetComment() != "browser@chrome" {
+		t.Fatalf("expected 1 browser@chrome key from WASM workstation, got %+v", idResp.GetKeys())
+	}
+
+	signReq := &sockcastv1.SignRequest{
+		RequestId:       "req-browser-ws-1",
+		TimestampUnixMs: uint64(time.Now().UnixMilli()),
+		KeyBlob:         idResp.GetKeys()[0].GetKeyBlob(),
+		Data:            []byte("ssh-userauth-challenge-data"),
+		ProcessContext: &sockcastv1.ProcessContext{
+			Hostname: "bastion.infra.local",
+			Uid:      1000,
+			Pid:      4321,
+			Comm:     "ssh",
+			Cmdline:  "ssh prod",
+		},
+		RelayGrant: relayGrant,
+		Auth:       relayAuth,
+	}
+	if err := auth.SignSignRequest(signReq, relayPriv); err != nil {
+		t.Fatalf("SignSignRequest: %v", err)
+	}
+
+	signResp, err := relayClient.Sign(ctx, signReq)
+	if err != nil {
+		t.Fatalf("Sign RPC failed: %v", err)
+	}
+	if !signResp.GetApproved() || signResp.GetHandledByNodeId() != "chrome-wasm-node" {
+		t.Fatalf("unexpected SignResponse: %+v", signResp)
+	}
+	if len(signResp.GetSignatureBlob()) < 64 {
+		t.Fatalf("expected valid SSH signature blob, got %d bytes", len(signResp.GetSignatureBlob()))
 	}
 }

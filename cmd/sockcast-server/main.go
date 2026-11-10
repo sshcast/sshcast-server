@@ -19,6 +19,7 @@ import (
 	"github.com/theraphim/sockcast-server/internal/config"
 	"github.com/theraphim/sockcast-server/internal/hub"
 	"github.com/theraphim/sockcast-server/internal/server"
+	"github.com/theraphim/sockcast-server/internal/web"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
@@ -105,6 +106,7 @@ func main() {
 		listenAddr   = flag.String("listen", "", "Listen address override when not socket-activated (e.g. unix:/run/sockcast/server.sock or 127.0.0.1:8080)")
 		tlsCertFile  = flag.String("tls-cert", "", "Optional TLS certificate file (leave empty for h2c behind Nginx/Cloudflare)")
 		tlsKeyFile   = flag.String("tls-key", "", "Optional TLS private key file")
+		webDir       = flag.String("web-dir", "", "Optional custom directory for /web/ static assets (e.g. custom sockcast_proto.wasm)")
 		allowAnyUser = flag.Bool("allow-any-user", false, "Allow any valid Ed25519 user root key without allowlist check")
 		allowedUsers stringSliceFlag
 	)
@@ -123,6 +125,9 @@ func main() {
 	}
 	if *tlsKeyFile != "" {
 		cfg.TLSKeyFile = *tlsKeyFile
+	}
+	if *webDir != "" {
+		cfg.WebDir = *webDir
 	}
 	if *allowAnyUser {
 		cfg.AllowAnyUser = true
@@ -158,6 +163,17 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintln(w, "ok")
+	})
+	mux.Handle("/ws/workstation", sockcastSrv.WorkstationWebSocketHandler())
+	webHandler := web.Handler(cfg.WebDir)
+	mux.Handle("/web", webHandler)
+	mux.Handle("/web/", webHandler)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/web/", http.StatusFound)
+			return
+		}
+		http.NotFound(w, r)
 	})
 
 	mixedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

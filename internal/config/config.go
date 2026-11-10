@@ -24,6 +24,7 @@ type Config struct {
 	SignResponseTimeoutMs uint64   `toml:"sign_response_timeout_ms"`
 	HeartbeatIntervalMs   uint64   `toml:"heartbeat_interval_ms"`
 	MaxClockSkewMs        uint64   `toml:"max_clock_skew_ms"`
+	WebDir                string   `toml:"web_dir"`
 
 	parsedAllowedKeys [][]byte
 }

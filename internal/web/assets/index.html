@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sockcast Browser Workstation (WASM SSH Agent)</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #2f81f7;
+      --ok: #238636;
+      --ok-text: #3fb950;
+      --warn: #9e6a03;
+      --warn-text: #d29922;
+      --err: #da3633;
+      --err-text: #f85149;
+      --code-bg: #010409;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 24px;
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand h1 {
+      font-size: 18px;
+      margin: 0;
+      font-weight: 600;
+    }
+    .header-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+    main {
+      max-width: 1240px;
+      margin: 20px auto;
+      padding: 0 20px 40px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+    @media (max-width: 960px) {
+      main { grid-template-columns: 1fr; }
+    }
+    .full-width {
+      grid-column: 1 / -1;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+    }
+    .card-header h2 {
+      font-size: 15px;
+      margin: 0;
+      font-weight: 600;
+    }
+    .badge {
+      display: inline-block;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .badge-ok { background: rgba(46, 160, 67, 0.2); color: var(--ok-text); border: 1px solid rgba(46, 160, 67, 0.45); }
+    .badge-warn { background: rgba(187, 128, 9, 0.2); color: var(--warn-text); border: 1px solid rgba(187, 128, 9, 0.45); }
+    .badge-err { background: rgba(248, 81, 73, 0.2); color: var(--err-text); border: 1px solid rgba(248, 81, 73, 0.45); }
+    .badge-neutral { background: rgba(139, 148, 158, 0.15); color: var(--muted); border: 1px solid var(--border); }
+
+    label {
+      display: block;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+    input[type="text"], input[type="password"], textarea {
+      width: 100%;
+      background: var(--code-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12.5px;
+      margin-bottom: 10px;
+    }
+    textarea { resize: vertical; min-height: 76px; }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-top: 6px;
+    }
+    .checkbox-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      margin: 0;
+      font-weight: 400;
+    }
+    .btn {
+      background: #21262d;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn:hover:not(:disabled) { background: #30363d; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); border-color: rgba(255,255,255,0.15); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #1f6feb; }
+    .btn-success { background: var(--ok); border-color: rgba(255,255,255,0.15); color: #fff; }
+    .btn-success:hover:not(:disabled) { background: #2ea043; }
+    .btn-danger { background: var(--err); border-color: rgba(255,255,255,0.15); color: #fff; }
+    .btn-danger:hover:not(:disabled) { background: #b62324; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    th, td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    .empty-cell { color: var(--muted); font-style: italic; text-align: center; padding: 14px; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: var(--code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .status-text { font-size: 12.5px; margin-top: 6px; color: var(--muted); }
+    .text-ok { color: var(--ok-text); }
+    .text-err { color: var(--err-text); }
+    .muted { color: var(--muted); font-size: 12.5px; }
+    .hidden { display: none !important; }
+
+    .approval-banner {
+      border: 2px solid var(--warn-text);
+      background: rgba(187, 128, 9, 0.08);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .kv-grid {
+      display: grid;
+      grid-template-columns: 170px 1fr;
+      gap: 6px 12px;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+    .kv-key { color: var(--muted); font-weight: 600; }
+    .kv-val { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; word-break: break-all; }
+    .ancestors-list {
+      margin: 4px 0 0;
+      padding-left: 18px;
+      font-size: 12px;
+    }
+    .log-box {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      height: 210px;
+      overflow-y: auto;
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+    .log-row { padding: 2px 0; border-bottom: 1px dashed rgba(48,54,61,0.4); }
+    .log-ok { color: var(--ok-text); }
+    .log-warn { color: var(--warn-text); }
+    .log-error { color: var(--err-text); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>Sockcast Browser Workstation</h1>
+      <span id="wasm-engine-badge" class="badge badge-neutral">Initializing WASM...</span>
+      <span id="conn-status-badge" class="badge badge-neutral">Disconnected</span>
+      <span id="conn-detail-text" class="muted"></span>
+    </div>
+    <div class="header-controls">
+      <label class="checkbox-label" title="Route SSH signing requests to this browser workstation first">
+        <input type="checkbox" id="force-active-chk" checked />
+        Force Priority (Active Workstation)
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="sound-alert-chk" checked />
+        Audio Chime
+      </label>
+      <button id="btn-enable-notifications" class="btn btn-sm">Enable Desktop Notifications</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Live SSH Signing Approval Card (Full Width) -->
+    <section class="card full-width">
+      <div class="card-header">
+        <h2>SSH Signing Approval &amp; 15-Minute Session Policy</h2>
+        <span id="pending-count-badge" class="badge badge-neutral">0 Pending</span>
+      </div>
+
+      <div id="sign-idle-box" class="muted" style="padding: 8px 0;">
+        Waiting for incoming SSH signing requests from connected relays. End-to-end Ed25519 relay signatures and RFC 4252 SSH userauth payloads are verified inside WebAssembly before prompting.
+      </div>
+
+      <div id="sign-approval-card" class="approval-banner hidden">
+        <div id="req-missing-key-warn" class="status-text text-err hidden" style="margin-bottom: 10px; font-weight: 600;">
+          ⚠️ The requested SSH public key is not currently loaded in the Browser WASM Agent. Load the matching private key below or deny this request.
+        </div>
+        <div class="kv-grid">
+          <div class="kv-key">Verified Source Host:</div>
+          <div class="kv-val" id="req-host"></div>
+          <div class="kv-key">SSH Target User:</div>
+          <div class="kv-val" id="req-target-user"></div>
+          <div class="kv-key">Primary Tool:</div>
+          <div class="kv-val" id="req-tool"></div>
+          <div class="kv-key">Command Line:</div>
+          <div class="kv-val" id="req-cmdline"></div>
+          <div class="kv-key">Working Directory:</div>
+          <div class="kv-val" id="req-cwd"></div>
+          <div class="kv-key">Leaf Process:</div>
+          <div class="kv-val" id="req-proc"></div>
+          <div class="kv-key">Process Ancestry:</div>
+          <div class="kv-val"><ul id="req-ancestors" class="ancestors-list"></ul></div>
+          <div class="kv-key">Requested SSH Key:</div>
+          <div class="kv-val" id="req-key"></div>
+          <div class="kv-key">Request ID:</div>
+          <div class="kv-val" id="req-id"></div>
+        </div>
+        <div class="row">
+          <button id="btn-approve-once" class="btn btn-success">Approve Once</button>
+          <button id="btn-approve-tool-15m" class="btn btn-primary">Approve Tool (15m)</button>
+          <button id="btn-approve-host-15m" class="btn">Approve ALL on Host (15m)</button>
+          <button id="btn-deny-req" class="btn btn-danger">Deny</button>
+        </div>
+      </div>
+
+      <div style="margin-top: 14px;">
+        <label>Active 15-Minute Auto-Approve Policies</label>
+        <table>
+          <thead>
+            <tr>
+              <th>Verified Host</th>
+              <th>Allowed Tool</th>
+              <th>Expires In</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="policies-tbody">
+            <tr><td colspan="4" class="empty-cell">No active 15-minute auto-approve rules.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Enrollment Bundle & WebSocket Connection -->
+    <section class="card">
+      <div class="card-header">
+        <h2>1. Client Enrollment Bundle &amp; Coordinator</h2>
+      </div>
+      <label for="bundle-input">Client Enrollment Bundle (<code>sc1_...</code>)</label>
+      <textarea id="bundle-input" placeholder="Paste your sc1_... client enrollment bundle here"></textarea>
+
+      <label for="ws-url-input">Coordinator WebSocket Endpoint (<code>wss://.../ws/workstation</code>)</label>
+      <input type="text" id="ws-url-input" placeholder="wss://coordinator.example.com/ws/workstation" />
+
+      <div class="row" style="justify-content: space-between;">
+        <label class="checkbox-label">
+          <input type="checkbox" id="remember-session-chk" />
+          Keep bundle in tab sessionStorage
+        </label>
+        <div class="row" style="margin-top: 0;">
+          <button id="btn-clear-storage" class="btn btn-sm">Clear Saved</button>
+          <button id="btn-disconnect" class="btn">Disconnect</button>
+          <button id="btn-connect" class="btn btn-primary">Connect Workstation</button>
+        </div>
+      </div>
+      <div id="bundle-status" class="status-text"></div>
+    </section>
+
+    <!-- Built-in WASM SSH Agent Key Ring -->
+    <section class="card">
+      <div class="card-header">
+        <h2>2. Built-in WASM SSH Agent Key Ring</h2>
+        <span id="keys-count-badge" class="badge badge-neutral">0 Key(s)</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Fingerprint</th>
+            <th>Comment</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="keys-tbody">
+          <tr><td colspan="4" class="empty-cell">No SSH keys loaded in browser WASM agent yet. Load an OpenSSH private key below.</td></tr>
+        </tbody>
+      </table>
+
+      <div class="row" style="margin-bottom: 8px; justify-content: space-between;">
+        <label for="ssh-key-pem-input" style="margin: 0;">Add OpenSSH Private Key (<code>ssh-ed25519</code>, unencrypted or passphrase-protected)</label>
+        <input type="file" id="ssh-key-file-input" style="font-size: 12px; max-width: 230px;" />
+      </div>
+      <textarea id="ssh-key-pem-input" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
+
+      <div class="row">
+        <input type="password" id="ssh-key-passphrase-input" placeholder="Passphrase (leave empty if unencrypted)" style="flex: 1; margin-bottom: 0;" />
+        <button id="btn-add-ssh-key" class="btn btn-primary">Load Key into WASM Agent</button>
+      </div>
+      <div id="key-add-status" class="status-text"></div>
+    </section>
+
+    <!-- Discovered Relay Hosts -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Online Relay Hosts &amp; Zellij Sessions</h2>
+        <button id="btn-refresh-zellij" class="btn btn-sm">Refresh Hosts</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Relay Host (node_id)</th>
+            <th>Zellij Status</th>
+            <th>Sessions</th>
+          </tr>
+        </thead>
+        <tbody id="zellij-hosts-tbody">
+          <tr><td colspan="3" class="empty-cell">No online Zellij relay hosts reported for this user.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Activity Log -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Workstation Event Log</h2>
+      </div>
+      <div id="event-log" class="log-box"></div>
+    </section>
+  </main>
+
+  <script src="./wasm_exec.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -90,7 +90,17 @@ func (s *SockcastServer) Sign(ctx context.Context, req *sockcastv1.SignRequest) 
 	return resp, nil
 }
 
+type workstationStream interface {
+	Context() context.Context
+	Send(*sockcastv1.ServerStreamMessage) error
+	Recv() (*sockcastv1.ClientStreamMessage, error)
+}
+
 func (s *SockcastServer) ConnectWorkstation(stream grpc.BidiStreamingServer[sockcastv1.ClientStreamMessage, sockcastv1.ServerStreamMessage]) error {
+	return s.serveWorkstationStream(stream, "grpc")
+}
+
+func (s *SockcastServer) serveWorkstationStream(stream workstationStream, transportLabel string) error {
 	firstMsg, err := stream.Recv()
 	if err != nil {
 		return err
@@ -108,10 +118,10 @@ func (s *SockcastServer) ConnectWorkstation(stream grpc.BidiStreamingServer[sock
 	ws := s.registry.RegisterWorkstation(userID, nodeID)
 	defer func() {
 		s.registry.UnregisterWorkstation(ws)
-		log.Printf("[grpc] Workstation disconnected: node=%s user=%s", nodeID, userID)
+		log.Printf("[%s] Workstation disconnected: node=%s user=%s", transportLabel, nodeID, userID)
 	}()
 
-	log.Printf("[grpc] Workstation connected: node=%s user=%s", nodeID, userID)
+	log.Printf("[%s] Workstation connected: node=%s user=%s", transportLabel, nodeID, userID)
 
 	// Send immediate heartbeat frame so client knows authentication succeeded.
 	if err := stream.Send(&sockcastv1.ServerStreamMessage{
