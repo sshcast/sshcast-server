@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -26,8 +27,21 @@ type WorkstationSession struct {
 	LastInputEpochMs uint64
 	ForceActive      bool
 	ConnectedAt      time.Time
+	Keys             []*sshcastv1.PublicKey
 	SendCh           chan *sshcastv1.ServerStreamMessage
 	DoneCh           chan struct{}
+}
+
+func (ws *WorkstationSession) HasKeyBlob(keyBlob []byte) bool {
+	if len(keyBlob) == 0 {
+		return false
+	}
+	for _, k := range ws.Keys {
+		if bytes.Equal(k.GetKeyBlob(), keyBlob) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ws *WorkstationSession) TrySend(msg *sshcastv1.ServerStreamMessage) bool {
@@ -181,7 +195,42 @@ func (r *Registry) UnregisterWorkstation(ws *WorkstationSession) {
 		default:
 			close(ws.DoneCh)
 		}
+		if len(uh.workstations) > 0 {
+			uh.rebuildCachedKeysLocked()
+		}
 	}
+}
+
+func (uh *UserHub) rebuildCachedKeysLocked() {
+	ordered := uh.sortedCandidatesLocked()
+	seen := make(map[string]struct{})
+	merged := make([]*sshcastv1.PublicKey, 0)
+	for _, ws := range ordered {
+		for _, k := range ws.Keys {
+			if k == nil || len(k.GetKeyBlob()) == 0 {
+				continue
+			}
+			blobKey := string(k.GetKeyBlob())
+			if _, dup := seen[blobKey]; dup {
+				continue
+			}
+			seen[blobKey] = struct{}{}
+			merged = append(merged, k)
+		}
+	}
+	uh.cachedKeys = merged
+}
+
+func (uh *UserHub) anyWorkstationHasKeyLocked(keyBlob []byte) bool {
+	if len(keyBlob) == 0 {
+		return false
+	}
+	for _, ws := range uh.workstations {
+		if ws.HasKeyBlob(keyBlob) {
+			return true
+		}
+	}
+	return false
 }
 
 // UpdateWorkstationStatus updates presence metadata and cached public keys for a workstation.
@@ -200,18 +249,26 @@ func (r *Registry) UpdateWorkstationStatus(ws *WorkstationSession, status *sshca
 	if status.GetOs() != "" {
 		ws.OS = status.GetOs()
 	}
-	// Always update cached keys when status is pushed (allows empty list if user filtered all keys,
-	// or non-empty list when keys are present).
+	// Update this workstation's keys and rebuild the deduplicated union across all connected workstations
+	// (ordered by workstation activity so the most active workstation's keys are offered first).
 	if status.Keys != nil {
 		cloned := make([]*sshcastv1.PublicKey, len(status.Keys))
 		copy(cloned, status.Keys)
-		uh.cachedKeys = cloned
+		ws.Keys = cloned
+	} else {
+		ws.Keys = nil
 	}
+	uh.rebuildCachedKeysLocked()
 
 	// Dynamic promotion: if a SignRequest is currently waiting for human action on another workstation,
-	// and this workstation reports ForceActive or a strictly newer LastInputEpochMs, also prompt this workstation.
+	// and this workstation reports ForceActive or a strictly newer LastInputEpochMs, also prompt this workstation
+	// (provided it actually holds the requested key, or no connected workstation advertised that key).
 	for _, p := range uh.pending {
 		if _, alreadyPrompted := p.promptedNodes[ws.NodeID]; alreadyPrompted {
+			continue
+		}
+		reqKey := p.req.GetKeyBlob()
+		if !ws.HasKeyBlob(reqKey) && uh.anyWorkstationHasKeyLocked(reqKey) {
 			continue
 		}
 		if ws.ForceActive || (ws.LastInputEpochMs > 0 && ws.LastInputEpochMs > p.highestInputSeen) {
@@ -229,12 +286,16 @@ func (r *Registry) UpdateWorkstationStatus(ws *WorkstationSession, status *sshca
 	}
 }
 
-// GetIdentities returns the latest cached public keys for userID.
+// GetIdentities returns the union of public keys across all connected workstations for userID
+// (ordered by workstation activity), or the last known cached keys if no workstations are connected.
 func (r *Registry) GetIdentities(userID string) []*sshcastv1.PublicKey {
 	uh := r.getOrCreateUserHub(userID)
 	uh.mu.Lock()
 	defer uh.mu.Unlock()
 
+	if len(uh.workstations) > 0 {
+		uh.rebuildCachedKeysLocked()
+	}
 	out := make([]*sshcastv1.PublicKey, len(uh.cachedKeys))
 	copy(out, uh.cachedKeys)
 	return out
@@ -297,13 +358,33 @@ func (uh *UserHub) sortedCandidatesLocked() []*WorkstationSession {
 	return candidates
 }
 
-// RouteSignRequest routes a SignRequest to the user's most recently active workstation using the
-// two-phase 1.5s SignAck receipt + 60s SignResponse approval protocol.
+func (uh *UserHub) sortedCandidatesForKeyLocked(keyBlob []byte) []*WorkstationSession {
+	all := uh.sortedCandidatesLocked()
+	if len(all) <= 1 || len(keyBlob) == 0 {
+		return all
+	}
+	matching := make([]*WorkstationSession, 0, len(all))
+	others := make([]*WorkstationSession, 0, len(all))
+	for _, ws := range all {
+		if ws.HasKeyBlob(keyBlob) {
+			matching = append(matching, ws)
+		} else {
+			others = append(others, ws)
+		}
+	}
+	if len(matching) == 0 {
+		return all
+	}
+	return append(matching, others...)
+}
+
+// RouteSignRequest routes a SignRequest to the user's most recently active workstation that holds
+// req.KeyBlob using the two-phase 1.5s SignAck receipt + 60s SignResponse approval protocol.
 func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *sshcastv1.SignRequest) (*sshcastv1.SignResponse, error) {
 	uh := r.getOrCreateUserHub(userID)
 
 	uh.mu.Lock()
-	candidates := uh.sortedCandidatesLocked()
+	candidates := uh.sortedCandidatesForKeyLocked(req.GetKeyBlob())
 	if len(candidates) == 0 {
 		uh.mu.Unlock()
 		return nil, ErrNoWorkstationConnected
