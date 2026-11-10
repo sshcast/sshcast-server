@@ -12,21 +12,25 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	sshcastv1 "stingr.net/go/sshcast-proto/gen/go/sshcast/v1"
+	"stingr.net/go/sshcast-proto/pkg/auth"
 )
 
 type Config struct {
-	ListenAddr            string   `toml:"listen_addr"`
-	TLSCertFile           string   `toml:"tls_cert_file"`
-	TLSKeyFile            string   `toml:"tls_key_file"`
-	AllowAnyUser          bool     `toml:"allow_any_user"`
-	AllowedUserPubkeys    []string `toml:"allowed_user_pubkeys"`
-	SignAckTimeoutMs      uint64   `toml:"sign_ack_timeout_ms"`
-	SignResponseTimeoutMs uint64   `toml:"sign_response_timeout_ms"`
-	HeartbeatIntervalMs   uint64   `toml:"heartbeat_interval_ms"`
-	MaxClockSkewMs        uint64   `toml:"max_clock_skew_ms"`
-	WebDir                string   `toml:"web_dir"`
+	ListenAddr             string   `toml:"listen_addr"`
+	TLSCertFile            string   `toml:"tls_cert_file"`
+	TLSKeyFile             string   `toml:"tls_key_file"`
+	AllowAnyUser           bool     `toml:"allow_any_user"`
+	AllowedUserPubkeys     []string `toml:"allowed_user_pubkeys"`
+	TrustedOperatorPubkeys []string `toml:"trusted_operator_pubkeys"`
+	SignAckTimeoutMs       uint64   `toml:"sign_ack_timeout_ms"`
+	SignResponseTimeoutMs  uint64   `toml:"sign_response_timeout_ms"`
+	HeartbeatIntervalMs    uint64   `toml:"heartbeat_interval_ms"`
+	MaxClockSkewMs         uint64   `toml:"max_clock_skew_ms"`
+	WebDir                 string   `toml:"web_dir"`
 
-	parsedAllowedKeys [][]byte
+	parsedAllowedKeys  [][]byte
+	parsedOperatorKeys [][]byte
 }
 
 func Default() *Config {
@@ -67,6 +71,7 @@ func Load(path string) (*Config, error) {
 
 func ParsePubkeyString(raw string) ([]byte, error) {
 	s := strings.TrimSpace(raw)
+	s = strings.TrimPrefix(s, "sc_op_pub_")
 	s = strings.TrimPrefix(s, "sc_pub_")
 	if b, err := hex.DecodeString(s); err == nil && len(b) == ed25519.PublicKeySize {
 		return b, nil
@@ -96,6 +101,17 @@ func (c *Config) CompileAllowedKeys() error {
 		}
 		c.parsedAllowedKeys = append(c.parsedAllowedKeys, pub)
 	}
+	c.parsedOperatorKeys = nil
+	for _, raw := range c.TrustedOperatorPubkeys {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		pub, err := ParsePubkeyString(raw)
+		if err != nil {
+			return err
+		}
+		c.parsedOperatorKeys = append(c.parsedOperatorKeys, pub)
+	}
 	return nil
 }
 
@@ -105,6 +121,35 @@ func (c *Config) IsUserPubkeyAllowed(userPubkey []byte) bool {
 	}
 	for _, allowed := range c.parsedAllowedKeys {
 		if bytes.Equal(allowed, userPubkey) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Config) IsOperatorPubkeyTrusted(operatorPubkey []byte) bool {
+	for _, trusted := range c.parsedOperatorKeys {
+		if bytes.Equal(trusted, operatorPubkey) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsGrantAuthorized returns true if the user is allowed via:
+// 1. allow_any_user = true, OR
+// 2. grant.UserPubkey is in allowed_user_pubkeys, OR
+// 3. grant.UserCert is present, signed by an operator key in trusted_operator_pubkeys, and valid at nowUnixSec.
+func (c *Config) IsGrantAuthorized(grant *sshcastv1.NodeGrant, nowUnixSec uint64) bool {
+	if grant == nil {
+		return false
+	}
+	if c.IsUserPubkeyAllowed(grant.GetUserPubkey()) {
+		return true
+	}
+	cert := grant.GetUserCert()
+	if cert != nil && c.IsOperatorPubkeyTrusted(cert.GetOperatorPubkey()) {
+		if err := auth.VerifyUserCert(cert, grant.GetUserPubkey(), nowUnixSec); err == nil {
 			return true
 		}
 	}

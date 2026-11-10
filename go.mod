@@ -7,7 +7,7 @@ require (
 	golang.org/x/net v0.60.0
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
-	stingr.net/go/sshcast-proto v0.1.2
+	stingr.net/go/sshcast-proto v0.1.3
 )
 
 require (

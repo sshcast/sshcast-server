@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"io"
 	"net"
 	"net/http"
@@ -539,5 +540,70 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	}
 	if len(signResp.GetSignatureBlob()) < 64 {
 		t.Fatalf("expected valid SSH signature blob, got %d bytes", len(signResp.GetSignatureBlob()))
+	}
+}
+
+func TestOperatorSignedUserCertAuthorization(t *testing.T) {
+	opPub, opPriv := keypair(0x91)
+	userPub, userPriv := keypair(0x92)
+	relayPub, relayPriv := keypair(0x93)
+
+	cfg := config.Default()
+	cfg.TrustedOperatorPubkeys = []string{"sc_op_pub_" + hex.EncodeToString(opPub)}
+	if err := cfg.CompileAllowedKeys(); err != nil {
+		t.Fatalf("CompileAllowedKeys: %v", err)
+	}
+
+	registry := hub.NewRegistry(cfg.SignAckTimeout(), cfg.SignResponseTimeout())
+	srv := New(cfg, registry)
+
+	grpcSrv := grpc.NewServer()
+	sshcastv1.RegisterSshcastServiceServer(grpcSrv, srv)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer grpcSrv.Stop()
+	go func() { _ = grpcSrv.Serve(ln) }()
+
+	conn, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	client := sshcastv1.NewSshcastServiceClient(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 1. Without UserCert, user not in allowed_user_pubkeys is rejected with PermissionDenied
+	_, uncertAuth := makeSignedGrantAndAuth(t, userPriv, relayPub, relayPriv, "relay-1", sshcastv1.NodeRole_NODE_ROLE_RELAY)
+	if _, err := client.GetIdentities(ctx, &sshcastv1.GetIdentitiesRequest{Auth: uncertAuth}); err == nil {
+		t.Fatalf("expected uncertified user to be rejected")
+	}
+
+	// 2. With UserCert signed by trusted operator, user is authorized without being in allowed_user_pubkeys
+	nowSec := uint64(time.Now().Unix())
+	cert := &sshcastv1.UserCert{
+		UserId:           "alice",
+		UserPubkey:       userPub,
+		IssuedAtUnixSec:  nowSec - 60,
+		ExpiresAtUnixSec: nowSec + 86400,
+	}
+	if err := auth.SignUserCert(cert, opPriv); err != nil {
+		t.Fatalf("SignUserCert: %v", err)
+	}
+	certGrant, _ := makeSignedGrantAndAuth(t, userPriv, relayPub, relayPriv, "relay-1", sshcastv1.NodeRole_NODE_ROLE_RELAY)
+	certGrant.UserCert = cert
+	certAuth := &sshcastv1.NodeAuth{
+		Grant:           certGrant,
+		TimestampUnixMs: uint64(time.Now().UnixMilli()),
+		Nonce:           []byte{1, 2, 3, 4, 5, 6, 7, 8},
+	}
+	if err := auth.SignNodeAuth(certAuth, relayPriv); err != nil {
+		t.Fatalf("SignNodeAuth: %v", err)
+	}
+	if _, err := client.GetIdentities(ctx, &sshcastv1.GetIdentitiesRequest{Auth: certAuth}); err != nil {
+		t.Fatalf("expected operator-certified user to be authorized, got: %v", err)
 	}
 }

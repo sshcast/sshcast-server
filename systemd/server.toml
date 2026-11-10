@@ -9,10 +9,16 @@ listen_addr = "unix:/run/sshcast/server.sock"
 tls_cert_file = ""
 tls_key_file = ""
 
-# Set to true only for testing or private open networks; otherwise specify allowed_user_pubkeys
+# Set to true only for testing or private open networks; otherwise specify trusted_operator_pubkeys or allowed_user_pubkeys
 allow_any_user = false
 
-# List of allowed User Root Ed25519 public keys (hex or base64 or sc_pub_... produced by sshcast-client keygen)
+# List of trusted Operator Ed25519 public keys (sc_op_pub_<hex> from sshcast-operator --keygen).
+# Any user holding a valid UserCert signed by one of these operator keys is automatically authorized.
+trusted_operator_pubkeys = [
+  # "sc_op_pub_..."
+]
+
+# List of explicitly allowed User Root Ed25519 public keys (hex or base64 or sc_pub_... produced by sshcast-client keygen)
 allowed_user_pubkeys = [
   # "sc_pub_..."
 ]

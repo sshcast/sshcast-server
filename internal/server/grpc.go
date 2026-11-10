@@ -35,8 +35,8 @@ func (s *SshcastServer) verifyCaller(nodeAuth *sshcastv1.NodeAuth, role sshcastv
 		return "", "", nil, status.Errorf(codes.Unauthenticated, "authentication failed: %v", err)
 	}
 	grant := nodeAuth.GetGrant()
-	if !s.cfg.IsUserPubkeyAllowed(grant.GetUserPubkey()) {
-		return "", "", nil, status.Errorf(codes.PermissionDenied, "user public key is not in server allowlist")
+	if !s.cfg.IsGrantAuthorized(grant, nowMs/1000) {
+		return "", "", nil, status.Errorf(codes.PermissionDenied, "user public key is not in server allowlist and has no valid trusted operator certificate")
 	}
 	canonicalUserID := auth.DeriveUserID(grant.GetUserPubkey())
 	return canonicalUserID, grant.GetNodeId(), grant.GetUserPubkey(), nil

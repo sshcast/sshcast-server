@@ -107,10 +107,12 @@ func main() {
 		tlsCertFile  = flag.String("tls-cert", "", "Optional TLS certificate file (leave empty for h2c behind Nginx/Cloudflare)")
 		tlsKeyFile   = flag.String("tls-key", "", "Optional TLS private key file")
 		webDir       = flag.String("web-dir", "", "Optional custom directory for /web/ static assets (e.g. custom sshcast_proto.wasm)")
-		allowAnyUser = flag.Bool("allow-any-user", false, "Allow any valid Ed25519 user root key without allowlist check")
-		allowedUsers stringSliceFlag
+		allowAnyUser     = flag.Bool("allow-any-user", false, "Allow any valid Ed25519 user root key without allowlist check")
+		allowedUsers     stringSliceFlag
+		trustedOperators stringSliceFlag
 	)
 	flag.Var(&allowedUsers, "allow-user-pubkey", "Allowed user Ed25519 public key (hex or base64, repeatable)")
+	flag.Var(&trustedOperators, "trusted-operator-pubkey", "Trusted operator Ed25519 public key (sc_op_pub_<hex>, hex, or base64, repeatable)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -132,15 +134,16 @@ func main() {
 	if *allowAnyUser {
 		cfg.AllowAnyUser = true
 	}
-	if len(allowedUsers) > 0 {
+	if len(allowedUsers) > 0 || len(trustedOperators) > 0 {
 		cfg.AllowedUserPubkeys = append(cfg.AllowedUserPubkeys, allowedUsers...)
+		cfg.TrustedOperatorPubkeys = append(cfg.TrustedOperatorPubkeys, trustedOperators...)
 		if err := cfg.CompileAllowedKeys(); err != nil {
-			log.Fatalf("Invalid --allow-user-pubkey: %v", err)
+			log.Fatalf("Invalid public key flag: %v", err)
 		}
 	}
 
-	if !cfg.AllowAnyUser && len(cfg.AllowedUserPubkeys) == 0 {
-		log.Printf("[warn] Neither allow_any_user nor allowed_user_pubkeys is configured; all requests will be denied until configured.")
+	if !cfg.AllowAnyUser && len(cfg.AllowedUserPubkeys) == 0 && len(cfg.TrustedOperatorPubkeys) == 0 {
+		log.Printf("[warn] Neither allow_any_user, trusted_operator_pubkeys, nor allowed_user_pubkeys is configured; all requests will be denied until configured.")
 	}
 
 	registry := hub.NewRegistry(cfg.SignAckTimeout(), cfg.SignResponseTimeout())

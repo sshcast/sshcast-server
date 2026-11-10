@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"embed"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"stingr.net/go/sshcast-proto/pkg/dns"
 )
 
 //go:embed assets/*
@@ -34,6 +37,23 @@ func Handler(customDir string) http.Handler {
 		}
 		if strings.Contains(rel, "..") || strings.Contains(rel, "\\") {
 			http.NotFound(w, r)
+			return
+		}
+
+		// 0. DNS TXT coordinator discovery helper for the Browser Workstation UI (/web/coordinators?domain=...)
+		if rel == "coordinators" {
+			domain := strings.TrimSpace(r.URL.Query().Get("domain"))
+			var servers []string
+			if domain != "" {
+				servers = dns.ResolveCoordinatorServers(r.Context(), []string{domain})
+			}
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":      true,
+				"domain":  domain,
+				"servers": servers,
+			})
 			return
 		}
 

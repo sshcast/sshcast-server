@@ -185,13 +185,40 @@
       return false;
     }
     currentBundleInfo = res;
-    $("bundle-status").textContent = `Verified CLIENT grant: node="${res.node_id}" user="${res.user_id}"`;
+    const certNote = res.has_user_cert ? " [Operator-Certified]" : "";
+    $("bundle-status").textContent = `Verified CLIENT grant: node="${res.node_id}" user="${res.user_id}"${certNote}`;
     $("bundle-status").className = "status-text text-ok";
 
     const currentWsInput = $("ws-url-input").value.trim();
     const locWs = defaultWsUrlFromLocation();
     if (!currentWsInput) {
       $("ws-url-input").value = locWs || res.ws_url || "";
+    }
+    if (
+      Array.isArray(res.dns_domains) &&
+      res.dns_domains.length > 0 &&
+      !res.ws_url
+    ) {
+      const dom = res.dns_domains[0];
+      fetch(`./coordinators?domain=${encodeURIComponent(dom)}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data && Array.isArray(data.servers) && data.servers.length > 0) {
+            const firstUrl = data.servers[0];
+            const wsUrl = firstUrl
+              .replace(/^https:\/\//i, "wss://")
+              .replace(/^http:\/\//i, "ws://")
+              .replace(/\/+$/, "") + "/ws/workstation";
+            logEvent(
+              "info",
+              `Resolved _sshcast.${dom} TXT coordinators: ${data.servers.join(", ")}`
+            );
+            if (!$("ws-url-input").value.trim()) {
+              $("ws-url-input").value = wsUrl;
+            }
+          }
+        })
+        .catch(() => {});
     }
 
     if ($("remember-session-chk").checked) {
