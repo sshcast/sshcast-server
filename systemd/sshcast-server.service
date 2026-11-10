@@ -5,7 +5,7 @@ After=network-online.target sshcast-server.socket
 Wants=network-online.target sshcast-server.socket
 
 [Service]
-Type=simple
+Type=notify
 DynamicUser=yes
 ConfigurationDirectory=sshcast::ro
 ConfigurationDirectoryMode=0755

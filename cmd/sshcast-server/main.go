@@ -10,11 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/coreos/go-systemd/v22/activation"
+	"github.com/coreos/go-systemd/v22/daemon"
 	sshcastv1 "stingr.net/go/sshcast-proto/gen/go/sshcast/v1"
 	"stingr.net/go/sshcast-server/internal/config"
 	"stingr.net/go/sshcast-server/internal/hub"
@@ -26,58 +27,12 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
-const systemdListenFDsStart = 3
-
 type stringSliceFlag []string
 
 func (s *stringSliceFlag) String() string { return strings.Join(*s, ",") }
 func (s *stringSliceFlag) Set(val string) error {
 	*s = append(*s, val)
 	return nil
-}
-
-// acquireSystemdListeners inspects LISTEN_FDS (and LISTEN_PID if set) and returns a net.Listener
-// for every socket file descriptor passed by systemd (starting at FD 3).
-// This allows sshcast-server to simultaneously serve any combination of sshcast-server.socket
-// (/run/sshcast/server.sock) and sshcast-server-tcp@<port>.socket (127.0.0.1:<port>).
-func acquireSystemdListeners() ([]net.Listener, error) {
-	nfdsStr := strings.TrimSpace(os.Getenv("LISTEN_FDS"))
-	if nfdsStr == "" {
-		return nil, nil
-	}
-	if pidStr := strings.TrimSpace(os.Getenv("LISTEN_PID")); pidStr != "" {
-		pid, err := strconv.Atoi(pidStr)
-		if err != nil || pid != os.Getpid() {
-			return nil, nil
-		}
-	}
-	nfds, err := strconv.Atoi(nfdsStr)
-	if err != nil || nfds <= 0 {
-		return nil, fmt.Errorf("invalid LISTEN_FDS=%q", nfdsStr)
-	}
-
-	listeners := make([]net.Listener, 0, nfds)
-	for i := 0; i < nfds; i++ {
-		fd := systemdListenFDsStart + i
-		syscall.CloseOnExec(fd)
-		f := os.NewFile(uintptr(fd), fmt.Sprintf("systemd-listen-fd-%d", fd))
-		if f == nil {
-			for _, ln := range listeners {
-				_ = ln.Close()
-			}
-			return nil, fmt.Errorf("failed to wrap systemd file descriptor %d", fd)
-		}
-		ln, err := net.FileListener(f)
-		_ = f.Close()
-		if err != nil {
-			for _, prev := range listeners {
-				_ = prev.Close()
-			}
-			return nil, fmt.Errorf("net.FileListener on fd %d: %w", fd, err)
-		}
-		listeners = append(listeners, ln)
-	}
-	return listeners, nil
 }
 
 // acquireStandaloneListener opens a Unix domain socket (if addr starts with "unix:" or "/")
@@ -192,7 +147,7 @@ func main() {
 		Handler: h2c.NewHandler(mixedHandler, h2Server),
 	}
 
-	listeners, err := acquireSystemdListeners()
+	listeners, err := activation.Listeners()
 	if err != nil {
 		log.Fatalf("Failed to acquire systemd socket-activated listeners: %v", err)
 	}
@@ -206,6 +161,9 @@ func main() {
 
 	errCh := make(chan error, len(listeners))
 	for _, ln := range listeners {
+		if ln == nil {
+			continue
+		}
 		ln := ln
 		go func() {
 			if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
@@ -218,12 +176,15 @@ func main() {
 		}()
 	}
 
+	_, _ = daemon.SdNotify(false, daemon.SdNotifyReady)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	select {
 	case sig := <-sigCh:
 		log.Printf("[sshcast-server] Received signal %v, shutting down...", sig)
+		_, _ = daemon.SdNotify(false, daemon.SdNotifyStopping)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		grpcServer.Stop()

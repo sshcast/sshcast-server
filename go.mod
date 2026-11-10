@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	github.com/BurntSushi/toml v1.5.0
+	github.com/coreos/go-systemd/v22 v22.7.0
 	golang.org/x/net v0.60.0
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
