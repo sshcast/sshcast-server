@@ -97,3 +97,75 @@ func TestMultiWorkstationKeyUnionAndRouting(t *testing.T) {
 		t.Fatalf("expected only keyB after ws1 disconnected, got %+v", remaining)
 	}
 }
+
+func TestCascadeAndCancelSignRequestToIgnoredWorkstation(t *testing.T) {
+	// signAckTimeout = 100ms, signResponseTimeout = 300ms (cascadeInterval = 75ms)
+	reg := NewRegistry(100*time.Millisecond, 300*time.Millisecond)
+	userID := "sc_u_cascadeuser"
+	sharedKey := &sshcastv1.PublicKey{
+		KeyBlob:           []byte("ssh-ed25519-shared-key"),
+		Comment:           "shared@user",
+		KeyType:           "ssh-ed25519",
+		FingerprintSha256: "SHA256:shared",
+	}
+
+	ws1 := reg.RegisterWorkstation(userID, "ws1-unattended")
+	ws2 := reg.RegisterWorkstation(userID, "ws2-attended")
+
+	reg.UpdateWorkstationStatus(ws1, &sshcastv1.WorkstationStatus{
+		LastInputEpochMs: 2000,
+		Keys:             []*sshcastv1.PublicKey{sharedKey},
+	})
+	reg.UpdateWorkstationStatus(ws2, &sshcastv1.WorkstationStatus{
+		LastInputEpochMs: 1000,
+		Keys:             []*sshcastv1.PublicKey{sharedKey},
+	})
+
+	ws1GotCancel := make(chan string, 1)
+	go func() {
+		// ws1 receives SignRequest and immediately SignAcks, but the user is away and ignores the modal
+		msg1 := <-ws1.SendCh
+		if sr := msg1.GetSignRequest(); sr != nil {
+			reg.HandleSignAck(userID, "ws1-unattended", &sshcastv1.SignAck{RequestId: sr.GetRequestId()})
+		}
+		// Expect CancelSignRequest when ws2 answers after cascade
+		msg2 := <-ws1.SendCh
+		if cancel := msg2.GetCancelSignRequest(); cancel != nil {
+			ws1GotCancel <- cancel.GetRequestId()
+		}
+	}()
+
+	go func() {
+		// ws2 receives the cascaded SignRequest and approves it
+		msg := <-ws2.SendCh
+		if sr := msg.GetSignRequest(); sr != nil {
+			reg.HandleSignResponse(userID, "ws2-attended", &sshcastv1.SignResponse{
+				RequestId:       sr.GetRequestId(),
+				Approved:        true,
+				SignatureBlob:   []byte("sig-from-ws2"),
+				HandledByNodeId: "ws2-attended",
+			})
+		}
+	}()
+
+	resp, err := reg.RouteSignRequest(context.Background(), userID, &sshcastv1.SignRequest{
+		RequestId: "req-cascade-1",
+		KeyBlob:   sharedKey.GetKeyBlob(),
+	})
+	if err != nil {
+		t.Fatalf("RouteSignRequest failed: %v", err)
+	}
+	if !resp.GetApproved() || resp.GetHandledByNodeId() != "ws2-attended" {
+		t.Fatalf("expected cascaded SignResponse from ws2-attended, got %+v", resp)
+	}
+
+	select {
+	case canceledID := <-ws1GotCancel:
+		if canceledID != "req-cascade-1" {
+			t.Fatalf("unexpected CancelSignRequest ID on ws1: %q", canceledID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CancelSignRequest on ignored workstation ws1")
+	}
+}
+

@@ -478,17 +478,62 @@ func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *ssh
 	}
 
 	// Phase 2: Wait up to signResponseTimeout (60s) for human approval or policy response.
+	// If multiple candidate workstations are available and the first workstation does not respond
+	// within cascadeInterval, step to the next unprompted candidate while keeping all notified
+	// workstations in p.promptedNodes so CancelSignRequest is always emitted to non-winning clients.
 	approvalTimer := time.NewTimer(r.signResponseTimeout)
 	defer approvalTimer.Stop()
 
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case resp := <-p.respCh:
-		winningNodeID = resp.GetHandledByNodeId()
-		return resp, nil
-	case <-approvalTimer.C:
-		return nil, ErrSignApprovalTimedOut
+	cascadeInterval := r.signResponseTimeout / 4
+	if cascadeInterval > 10*time.Second {
+		cascadeInterval = 10 * time.Second
+	}
+	if cascadeInterval < 50*time.Millisecond {
+		cascadeInterval = 50 * time.Millisecond
+	}
+	cascadeTimer := time.NewTimer(cascadeInterval)
+	defer cascadeTimer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case resp := <-p.respCh:
+			winningNodeID = resp.GetHandledByNodeId()
+			return resp, nil
+		case <-approvalTimer.C:
+			return nil, ErrSignApprovalTimedOut
+		case <-cascadeTimer.C:
+			uh.mu.Lock()
+			reqKey := req.GetKeyBlob()
+			anyHasKey := uh.anyWorkstationHasKeyLocked(reqKey)
+			promptedNext := false
+			for _, ws := range uh.sortedCandidatesForKeyLocked(reqKey) {
+				if _, already := p.promptedNodes[ws.NodeID]; already {
+					continue
+				}
+				if anyHasKey && !ws.HasKeyBlob(reqKey) {
+					continue
+				}
+				if ws.TrySend(&sshcastv1.ServerStreamMessage{
+					Payload: &sshcastv1.ServerStreamMessage_SignRequest{
+						SignRequest: req,
+					},
+				}) {
+					p.promptedNodes[ws.NodeID] = ws.LastInputEpochMs
+					if ws.LastInputEpochMs > p.highestInputSeen {
+						p.highestInputSeen = ws.LastInputEpochMs
+					}
+					log.Printf("[hub] Cascaded SignRequest %s to next workstation %s", req.GetRequestId(), ws.NodeID)
+					promptedNext = true
+					break
+				}
+			}
+			uh.mu.Unlock()
+			if promptedNext {
+				cascadeTimer.Reset(cascadeInterval)
+			}
+		}
 	}
 }
 

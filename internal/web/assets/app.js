@@ -482,6 +482,13 @@
           return;
         }
 
+        if (
+          (activePromptReq && activePromptReq.request_id === req.request_id) ||
+          pendingQueue.some((r) => r.request_id === req.request_id)
+        ) {
+          return;
+        }
+
         // 3. Queue for interactive user approval
         pendingQueue.push(req);
         updatePendingBadge();
