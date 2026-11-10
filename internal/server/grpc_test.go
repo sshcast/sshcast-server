@@ -4,14 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"encoding/base64"
-	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +16,6 @@ import (
 	"github.com/theraphim/sockcast-proto/pkg/auth"
 	"github.com/theraphim/sockcast-server/internal/config"
 	"github.com/theraphim/sockcast-server/internal/hub"
-	"github.com/theraphim/sockcast-server/internal/wasmengine"
 	"github.com/theraphim/sockcast-server/internal/web"
 	"golang.org/x/net/websocket"
 	"google.golang.org/grpc"
@@ -393,7 +388,7 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	httpSrv := httptest.NewServer(mux)
 	defer httpSrv.Close()
 
-	// 1. Verify /web/ serves index.html, app.js, and sockcast_wasm.wasm
+	// 1. Verify /web/ serves index.html, app.js, and the Rust sockcast-client sockcast_wasm.wasm binary
 	respIndex, err := http.Get(httpSrv.URL + "/web/")
 	if err != nil || respIndex.StatusCode != http.StatusOK {
 		t.Fatalf("GET /web/ failed: status=%v err=%v", respIndex, err)
@@ -407,91 +402,18 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	if ct := respWasm.Header.Get("Content-Type"); ct != "application/wasm" {
 		t.Fatalf("expected Content-Type application/wasm, got %q", ct)
 	}
+	wasmBytes, err := io.ReadAll(respWasm.Body)
 	_ = respWasm.Body.Close()
-
-	// 2. Build an sc1_ client enrollment bundle and load an encrypted ssh-keygen key into wasmengine
-	wsGrant, _ := makeSignedGrantAndAuth(t, userPriv, wsPub, wsPriv, "chrome-wasm-node", sockcastv1.NodeRole_NODE_ROLE_CLIENT)
-	grantBytes, err := proto.Marshal(wsGrant)
-	if err != nil {
-		t.Fatalf("proto.Marshal grant: %v", err)
+	if err != nil || len(wasmBytes) < 8 || !bytes.Equal(wasmBytes[:4], []byte{0x00, 0x61, 0x73, 0x6d}) {
+		t.Fatalf("expected valid WebAssembly binary magic header, got len=%d err=%v", len(wasmBytes), err)
 	}
-	wireJSON, err := json.Marshal(map[string]any{
-		"servers":               []string{httpSrv.URL},
-		"node_privkey_seed_b64": base64.RawURLEncoding.EncodeToString(wsPriv.Seed()),
-		"grant_proto_b64":       base64.RawURLEncoding.EncodeToString(grantBytes),
-	})
-	if err != nil {
-		t.Fatalf("json.Marshal bundle wire: %v", err)
-	}
-	bundleToken := "sc1_" + base64.RawURLEncoding.EncodeToString(wireJSON) + ".rk_" + base64.RawURLEncoding.EncodeToString(userPriv.Seed())
-
-	tmpDir := t.TempDir()
-	keyPath := filepath.Join(tmpDir, "id_ed25519_wasm")
-	cmd := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-a", "4", "-Z", "aes256-ctr", "-N", "wasm-pass-123", "-C", "browser@chrome", "-f", keyPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("ssh-keygen failed: %v: %s", err, string(out))
-	}
-	pemBytes, err := os.ReadFile(keyPath)
-	if err != nil {
-		t.Fatalf("ReadFile keyPath: %v", err)
+	if !bytes.Contains(wasmBytes, []byte("sockcast_wasm_call")) {
+		t.Fatalf("expected sockcast_wasm.wasm to export sockcast_wasm_call from sockcast-client")
 	}
 
-	eng := wasmengine.NewEngine()
-	callWasm := func(req map[string]any) map[string]any {
-		t.Helper()
-		b, _ := json.Marshal(req)
-		outStr := eng.CallJSON(string(b))
-		var resp map[string]any
-		if err := json.Unmarshal([]byte(outStr), &resp); err != nil {
-			t.Fatalf("Unmarshal wasm response: %v (%s)", err, outStr)
-		}
-		return resp
-	}
+	// 2. Connect Browser WASM Workstation over WebSocket (/ws/workstation)
+	_, wsAuth := makeSignedGrantAndAuth(t, userPriv, wsPub, wsPriv, "chrome-wasm-node", sockcastv1.NodeRole_NODE_ROLE_CLIENT)
 
-	rBundle := callWasm(map[string]any{
-		"op":           "set_bundle",
-		"bundle_str":   bundleToken,
-		"now_unix_sec": time.Now().Unix(),
-	})
-	if rBundle["ok"] != true {
-		t.Fatalf("set_bundle failed: %+v", rBundle)
-	}
-
-	rKey := callWasm(map[string]any{
-		"op":         "add_ssh_key",
-		"pem":        string(pemBytes),
-		"passphrase": "wasm-pass-123",
-	})
-	if rKey["ok"] != true {
-		t.Fatalf("add_ssh_key failed: %+v", rKey)
-	}
-
-	// Also verify RSA keys (both OpenSSH format and classic BEGIN RSA PRIVATE KEY PEM format)
-	rsaOpenSSHPath := filepath.Join(tmpDir, "id_rsa_openssh")
-	if out, err := exec.Command("ssh-keygen", "-q", "-t", "rsa", "-b", "2048", "-N", "", "-C", "rsa@chrome", "-f", rsaOpenSSHPath).CombinedOutput(); err != nil {
-		t.Fatalf("ssh-keygen rsa openssh failed: %v: %s", err, string(out))
-	}
-	rsaOpenSSHPem, _ := os.ReadFile(rsaOpenSSHPath)
-	if r := callWasm(map[string]any{"op": "add_ssh_key", "pem": string(rsaOpenSSHPem)}); r["ok"] != true {
-		t.Fatalf("add_ssh_key (rsa openssh) failed: %+v", r)
-	}
-
-	rsaPEMPath := filepath.Join(tmpDir, "id_rsa_pem")
-	if out, err := exec.Command("ssh-keygen", "-q", "-t", "rsa", "-b", "2048", "-m", "PEM", "-N", "", "-f", rsaPEMPath).CombinedOutput(); err != nil {
-		t.Fatalf("ssh-keygen rsa pem failed: %v: %s", err, string(out))
-	}
-	if out, err := exec.Command("openssl", "rsa", "-in", rsaPEMPath, "-out", rsaPEMPath, "-traditional", "-des3", "-passout", "pass:des3-secret").CombinedOutput(); err != nil {
-		t.Fatalf("openssl rsa -des3 failed: %v: %s", err, string(out))
-	}
-	rsaPEMBytes, _ := os.ReadFile(rsaPEMPath)
-	if r := callWasm(map[string]any{"op": "add_ssh_key", "pem": string(rsaPEMBytes)}); r["ok"] == true || r["needs_passphrase"] != true {
-		t.Fatalf("expected needs_passphrase for DES-EDE3-CBC RSA PEM, got: %+v", r)
-	}
-	if r := callWasm(map[string]any{"op": "add_ssh_key", "pem": string(rsaPEMBytes), "passphrase": "des3-secret"}); r["ok"] != true {
-		t.Fatalf("add_ssh_key (rsa classic DES-EDE3-CBC PEM) failed: %+v", r)
-	}
-
-	// 3. Connect Browser WASM Workstation over WebSocket (/ws/workstation)
 	wsURL := "ws://" + strings.TrimPrefix(httpSrv.URL, "http://") + "/ws/workstation"
 	wsConn, err := websocket.Dial(wsURL, "", httpSrv.URL)
 	if err != nil {
@@ -499,52 +421,69 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	}
 	defer wsConn.Close()
 
-	sendFrameB64 := func(b64 string) {
+	sendClientFrame := func(msg *sockcastv1.ClientStreamMessage) {
 		t.Helper()
-		raw, err := base64.StdEncoding.DecodeString(b64)
+		raw, err := proto.Marshal(msg)
 		if err != nil {
-			t.Fatalf("DecodeString frame_b64: %v", err)
+			t.Fatalf("proto.Marshal ClientStreamMessage: %v", err)
 		}
 		if err := websocket.Message.Send(wsConn, raw); err != nil {
 			t.Fatalf("websocket.Message.Send: %v", err)
 		}
 	}
 
-	rHS := callWasm(map[string]any{
-		"op":          "build_auth_handshake_frame",
-		"now_unix_ms": time.Now().UnixMilli(),
+	sendClientFrame(&sockcastv1.ClientStreamMessage{
+		Payload: &sockcastv1.ClientStreamMessage_AuthHandshake{
+			AuthHandshake: wsAuth,
+		},
 	})
-	sendFrameB64(rHS["frame_b64"].(string))
 
-	rStatus := callWasm(map[string]any{
-		"op":                  "build_status_frame",
-		"last_input_epoch_ms": time.Now().UnixMilli(),
-		"force_active":        true,
+	testKeyBlob := []byte("ssh-ed25519-test-key-blob-for-ws")
+	sendClientFrame(&sockcastv1.ClientStreamMessage{
+		Payload: &sockcastv1.ClientStreamMessage_Status{
+			Status: &sockcastv1.WorkstationStatus{
+				LastInputEpochMs: uint64(time.Now().UnixMilli()),
+				ForceActive:      true,
+				Os:               "browser-wasm",
+				Keys: []*sockcastv1.PublicKey{
+					{
+						KeyBlob:           testKeyBlob,
+						KeyType:           "ssh-ed25519",
+						FingerprintSha256: "SHA256:test-ws-fp",
+						Comment:           "browser@chrome",
+					},
+				},
+			},
+		},
 	})
-	sendFrameB64(rStatus["frame_b64"].(string))
 
-	// Background browser WebSocket receive loop (auto-approving SignRequest via wasmengine)
+	// Background browser WebSocket receive loop
 	go func() {
 		for {
 			var raw []byte
 			if err := websocket.Message.Receive(wsConn, &raw); err != nil {
 				return
 			}
-			decoded := callWasm(map[string]any{
-				"op":           "decode_server_frame",
-				"frame_b64":    base64.StdEncoding.EncodeToString(raw),
-				"now_unix_sec": time.Now().Unix(),
-			})
-			if decoded["frame_type"] == "sign_request" {
-				sendFrameB64(decoded["ack_frame_b64"].(string))
-				reqInfo := decoded["request"].(map[string]any)
-				reqID := reqInfo["request_id"].(string)
-				dec := callWasm(map[string]any{
-					"op":         "decide_sign_request",
-					"request_id": reqID,
-					"approved":   true,
+			var srvMsg sockcastv1.ServerStreamMessage
+			if err := proto.Unmarshal(raw, &srvMsg); err != nil {
+				return
+			}
+			if sr := srvMsg.GetSignRequest(); sr != nil {
+				sendClientFrame(&sockcastv1.ClientStreamMessage{
+					Payload: &sockcastv1.ClientStreamMessage_SignAck{
+						SignAck: &sockcastv1.SignAck{RequestId: sr.GetRequestId()},
+					},
 				})
-				sendFrameB64(dec["frame_b64"].(string))
+				sendClientFrame(&sockcastv1.ClientStreamMessage{
+					Payload: &sockcastv1.ClientStreamMessage_SignResponse{
+						SignResponse: &sockcastv1.SignResponse{
+							RequestId:       sr.GetRequestId(),
+							Approved:        true,
+							SignatureBlob:   bytes.Repeat([]byte{0xab}, 64),
+							HandledByNodeId: "chrome-wasm-node",
+						},
+					},
+				})
 				return
 			}
 		}
@@ -552,7 +491,7 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 
 	time.Sleep(40 * time.Millisecond)
 
-	// 4. Connect Relay via gRPC, call GetIdentities and Sign
+	// 3. Connect Relay via gRPC, call GetIdentities and Sign
 	grpcConn, err := grpc.NewClient(grpcLis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("grpc.NewClient: %v", err)
@@ -568,8 +507,8 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIdentities: %v", err)
 	}
-	if len(idResp.GetKeys()) != 3 || idResp.GetKeys()[0].GetComment() != "browser@chrome" || idResp.GetKeys()[1].GetKeyType() != "ssh-rsa" {
-		t.Fatalf("expected 3 keys (ed25519 + 2 rsa) from WASM workstation, got %+v", idResp.GetKeys())
+	if len(idResp.GetKeys()) != 1 || idResp.GetKeys()[0].GetComment() != "browser@chrome" {
+		t.Fatalf("expected 1 key from WASM workstation, got %+v", idResp.GetKeys())
 	}
 
 	signReq := &sockcastv1.SignRequest{

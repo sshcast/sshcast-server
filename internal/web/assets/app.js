@@ -59,84 +59,43 @@
     return btoa(bin);
   }
 
-  async function tryLoadRustWasm() {
-    try {
-      const resp = await fetch("./sockcast_proto.wasm", { cache: "no-cache" });
-      if (!resp.ok) return null;
-      const buf = await resp.arrayBuffer();
-      const magic = new Uint8Array(buf, 0, 4);
-      if (
-        magic.length < 4 ||
-        magic[0] !== 0x00 ||
-        magic[1] !== 0x61 ||
-        magic[2] !== 0x73 ||
-        magic[3] !== 0x6d
-      ) {
-        return null;
-      }
-      const { instance } = await WebAssembly.instantiate(buf, {});
-      const ex = instance.exports;
-      if (
-        typeof ex.sockcast_wasm_alloc !== "function" ||
-        typeof ex.sockcast_wasm_call !== "function"
-      ) {
-        return null;
-      }
-      const encoder = new TextEncoder();
-      const decoder = new TextDecoder();
-      return {
-        type: "rust-wasm (sockcast_proto.wasm)",
-        call(reqObj) {
-          const reqBytes = encoder.encode(JSON.stringify(reqObj));
-          const ptr = ex.sockcast_wasm_alloc(reqBytes.length);
-          new Uint8Array(ex.memory.buffer, ptr, reqBytes.length).set(reqBytes);
-          const resLen = ex.sockcast_wasm_call(ptr, reqBytes.length);
-          ex.sockcast_wasm_free(ptr, reqBytes.length);
-          const resPtr = ex.sockcast_wasm_result_ptr();
-          const resBytes = new Uint8Array(ex.memory.buffer, resPtr, resLen);
-          return JSON.parse(decoder.decode(resBytes));
-        },
-      };
-    } catch (_) {
-      return null;
-    }
-  }
-
-  async function loadGoWasm() {
-    if (typeof Go === "undefined") {
-      throw new Error("wasm_exec.js is not loaded");
-    }
-    const go = new Go();
-    const resp = await fetch("./sockcast_wasm.wasm");
+  async function loadRustClientWasm() {
+    const resp = await fetch("./sockcast_wasm.wasm", { cache: "no-cache" });
     if (!resp.ok) {
       throw new Error(`Failed to fetch sockcast_wasm.wasm: HTTP ${resp.status}`);
     }
-    let result;
-    if (WebAssembly.instantiateStreaming) {
-      try {
-        result = await WebAssembly.instantiateStreaming(resp, go.importObject);
-      } catch (_) {
-        const fallbackResp = await fetch("./sockcast_wasm.wasm");
-        const buf = await fallbackResp.arrayBuffer();
-        result = await WebAssembly.instantiate(buf, go.importObject);
-      }
-    } else {
-      const buf = await resp.arrayBuffer();
-      result = await WebAssembly.instantiate(buf, go.importObject);
+    const buf = await resp.arrayBuffer();
+    const magic = new Uint8Array(buf, 0, 4);
+    if (
+      magic.length < 4 ||
+      magic[0] !== 0x00 ||
+      magic[1] !== 0x61 ||
+      magic[2] !== 0x73 ||
+      magic[3] !== 0x6d
+    ) {
+      throw new Error("Invalid WebAssembly magic header in sockcast_wasm.wasm");
     }
-    go.run(result.instance);
-    for (let i = 0; i < 50; i++) {
-      if (globalThis.__sockcastGoWasm) break;
-      await new Promise((r) => setTimeout(r, 20));
+    const { instance } = await WebAssembly.instantiate(buf, {});
+    const ex = instance.exports;
+    if (
+      typeof ex.sockcast_wasm_alloc !== "function" ||
+      typeof ex.sockcast_wasm_call !== "function"
+    ) {
+      throw new Error("sockcast_wasm.wasm is missing sockcast-client FFI exports");
     }
-    if (!globalThis.__sockcastGoWasm) {
-      throw new Error("WASM module did not register __sockcastGoWasm");
-    }
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
     return {
-      type: "wasm (sockcast_wasm.wasm)",
+      type: "rust-wasm (sockcast-client)",
       call(reqObj) {
-        const raw = globalThis.__sockcastGoWasm.callJSON(JSON.stringify(reqObj));
-        return JSON.parse(raw);
+        const reqBytes = encoder.encode(JSON.stringify(reqObj));
+        const ptr = ex.sockcast_wasm_alloc(reqBytes.length);
+        new Uint8Array(ex.memory.buffer, ptr, reqBytes.length).set(reqBytes);
+        const resLen = ex.sockcast_wasm_call(ptr, reqBytes.length);
+        ex.sockcast_wasm_free(ptr, reqBytes.length);
+        const resPtr = ex.sockcast_wasm_result_ptr();
+        const resBytes = new Uint8Array(ex.memory.buffer, resPtr, resLen);
+        return JSON.parse(decoder.decode(resBytes));
       },
     };
   }
@@ -145,10 +104,7 @@
     const badge = $("wasm-engine-badge");
     try {
       badge.textContent = "Loading WASM Engine...";
-      let eng = await tryLoadRustWasm();
-      if (!eng) {
-        eng = await loadGoWasm();
-      }
+      const eng = await loadRustClientWasm();
       wasmEngine = eng;
       badge.textContent = `Engine: ${eng.type}`;
       badge.className = "badge badge-ok";
