@@ -15,11 +15,11 @@ import (
 	"syscall"
 	"time"
 
-	sockcastv1 "github.com/theraphim/sockcast-proto/gen/go/sockcast/v1"
-	"github.com/theraphim/sockcast-server/internal/config"
-	"github.com/theraphim/sockcast-server/internal/hub"
-	"github.com/theraphim/sockcast-server/internal/server"
-	"github.com/theraphim/sockcast-server/internal/web"
+	sshcastv1 "stingr.net/go/sshcast-proto/gen/go/sshcast/v1"
+	"stingr.net/go/sshcast-server/internal/config"
+	"stingr.net/go/sshcast-server/internal/hub"
+	"stingr.net/go/sshcast-server/internal/server"
+	"stingr.net/go/sshcast-server/internal/web"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
@@ -38,8 +38,8 @@ func (s *stringSliceFlag) Set(val string) error {
 
 // acquireSystemdListeners inspects LISTEN_FDS (and LISTEN_PID if set) and returns a net.Listener
 // for every socket file descriptor passed by systemd (starting at FD 3).
-// This allows sockcast-server to simultaneously serve any combination of sockcast-server.socket
-// (/run/sockcast/server.sock) and sockcast-server-tcp@<port>.socket (127.0.0.1:<port>).
+// This allows sshcast-server to simultaneously serve any combination of sshcast-server.socket
+// (/run/sshcast/server.sock) and sshcast-server-tcp@<port>.socket (127.0.0.1:<port>).
 func acquireSystemdListeners() ([]net.Listener, error) {
 	nfdsStr := strings.TrimSpace(os.Getenv("LISTEN_FDS"))
 	if nfdsStr == "" {
@@ -81,7 +81,7 @@ func acquireSystemdListeners() ([]net.Listener, error) {
 }
 
 // acquireStandaloneListener opens a Unix domain socket (if addr starts with "unix:" or "/")
-// or a TCP listener when sockcast-server is started outside systemd socket activation.
+// or a TCP listener when sshcast-server is started outside systemd socket activation.
 func acquireStandaloneListener(addr string) (net.Listener, error) {
 	trimmed := strings.TrimSpace(addr)
 	if strings.HasPrefix(trimmed, "unix:") || strings.HasPrefix(trimmed, "/") {
@@ -103,10 +103,10 @@ func acquireStandaloneListener(addr string) (net.Listener, error) {
 func main() {
 	var (
 		configPath   = flag.String("config", "", "Path to server.toml configuration file")
-		listenAddr   = flag.String("listen", "", "Listen address override when not socket-activated (e.g. unix:/run/sockcast/server.sock or 127.0.0.1:8080)")
+		listenAddr   = flag.String("listen", "", "Listen address override when not socket-activated (e.g. unix:/run/sshcast/server.sock or 127.0.0.1:8080)")
 		tlsCertFile  = flag.String("tls-cert", "", "Optional TLS certificate file (leave empty for h2c behind Nginx/Cloudflare)")
 		tlsKeyFile   = flag.String("tls-key", "", "Optional TLS private key file")
-		webDir       = flag.String("web-dir", "", "Optional custom directory for /web/ static assets (e.g. custom sockcast_proto.wasm)")
+		webDir       = flag.String("web-dir", "", "Optional custom directory for /web/ static assets (e.g. custom sshcast_proto.wasm)")
 		allowAnyUser = flag.Bool("allow-any-user", false, "Allow any valid Ed25519 user root key without allowlist check")
 		allowedUsers stringSliceFlag
 	)
@@ -144,7 +144,7 @@ func main() {
 	}
 
 	registry := hub.NewRegistry(cfg.SignAckTimeout(), cfg.SignResponseTimeout())
-	sockcastSrv := server.New(cfg, registry)
+	sshcastSrv := server.New(cfg, registry)
 
 	grpcServer := grpc.NewServer(
 		grpc.KeepaliveParams(keepalive.ServerParameters{
@@ -156,7 +156,7 @@ func main() {
 			PermitWithoutStream: true,
 		}),
 	)
-	sockcastv1.RegisterSockcastServiceServer(grpcServer, sockcastSrv)
+	sshcastv1.RegisterSshcastServiceServer(grpcServer, sshcastSrv)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +164,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintln(w, "ok")
 	})
-	mux.Handle("/ws/workstation", sockcastSrv.WorkstationWebSocketHandler())
+	mux.Handle("/ws/workstation", sshcastSrv.WorkstationWebSocketHandler())
 	webHandler := web.Handler(cfg.WebDir)
 	mux.Handle("/web", webHandler)
 	mux.Handle("/web/", webHandler)
@@ -206,10 +206,10 @@ func main() {
 		ln := ln
 		go func() {
 			if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-				log.Printf("[sockcast-server] Listening on %s://%s (TLS + HTTP/2 gRPC)", ln.Addr().Network(), ln.Addr().String())
+				log.Printf("[sshcast-server] Listening on %s://%s (TLS + HTTP/2 gRPC)", ln.Addr().Network(), ln.Addr().String())
 				errCh <- httpServer.ServeTLS(ln, cfg.TLSCertFile, cfg.TLSKeyFile)
 			} else {
-				log.Printf("[sockcast-server] Listening on %s://%s (h2c HTTP/2 cleartext for Nginx/Cloudflare proxy)", ln.Addr().Network(), ln.Addr().String())
+				log.Printf("[sshcast-server] Listening on %s://%s (h2c HTTP/2 cleartext for Nginx/Cloudflare proxy)", ln.Addr().Network(), ln.Addr().String())
 				errCh <- httpServer.Serve(ln)
 			}
 		}()
@@ -220,14 +220,14 @@ func main() {
 
 	select {
 	case sig := <-sigCh:
-		log.Printf("[sockcast-server] Received signal %v, shutting down...", sig)
+		log.Printf("[sshcast-server] Received signal %v, shutting down...", sig)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		grpcServer.Stop()
 		_ = httpServer.Shutdown(ctx)
 	case err := <-errCh:
 		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("[sockcast-server] Server error: %v", err)
+			log.Fatalf("[sshcast-server] Server error: %v", err)
 		}
 	}
 }

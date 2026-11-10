@@ -1,0 +1,12 @@
+[Unit]
+Description=Sshcast Coordinator Server Unix Socket (for Nginx grpc_pass)
+Documentation=https://github.com/theraphim/sshcast-server
+
+[Socket]
+ListenStream=/run/sshcast/server.sock
+RuntimeDirectory=sshcast
+SocketMode=0666
+Accept=no
+
+[Install]
+WantedBy=sockets.target

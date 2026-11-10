@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"sync"
 
-	sockcastv1 "github.com/theraphim/sockcast-proto/gen/go/sockcast/v1"
+	sshcastv1 "stingr.net/go/sshcast-proto/gen/go/sshcast/v1"
 	"golang.org/x/net/websocket"
 	"google.golang.org/protobuf/proto"
 )
@@ -21,7 +21,7 @@ func (w *wsWorkstationStream) Context() context.Context {
 	return w.ctx
 }
 
-func (w *wsWorkstationStream) Send(msg *sockcastv1.ServerStreamMessage) error {
+func (w *wsWorkstationStream) Send(msg *sshcastv1.ServerStreamMessage) error {
 	raw, err := proto.Marshal(msg)
 	if err != nil {
 		return err
@@ -31,12 +31,12 @@ func (w *wsWorkstationStream) Send(msg *sockcastv1.ServerStreamMessage) error {
 	return websocket.Message.Send(w.conn, raw)
 }
 
-func (w *wsWorkstationStream) Recv() (*sockcastv1.ClientStreamMessage, error) {
+func (w *wsWorkstationStream) Recv() (*sshcastv1.ClientStreamMessage, error) {
 	var raw []byte
 	if err := websocket.Message.Receive(w.conn, &raw); err != nil {
 		return nil, err
 	}
-	msg := &sockcastv1.ClientStreamMessage{}
+	msg := &sshcastv1.ClientStreamMessage{}
 	if err := proto.Unmarshal(raw, msg); err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func (w *wsWorkstationStream) Recv() (*sockcastv1.ClientStreamMessage, error) {
 // WorkstationWebSocketHandler returns an http.Handler that upgrades HTTP GET /ws/workstation
 // connections to binary WebSocket streams speaking Protobuf ClientStreamMessage / ServerStreamMessage.
 // This allows the browser WASM workstation client to connect through standard HTTPS/WSS proxies.
-func (s *SockcastServer) WorkstationWebSocketHandler() http.Handler {
+func (s *SshcastServer) WorkstationWebSocketHandler() http.Handler {
 	wsServer := websocket.Server{
 		Handshake: func(cfg *websocket.Config, r *http.Request) error {
 			// Accept browser WebSocket connections regardless of Origin header, since

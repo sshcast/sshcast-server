@@ -7,29 +7,29 @@ import (
 	"log"
 	"time"
 
-	sockcastv1 "github.com/theraphim/sockcast-proto/gen/go/sockcast/v1"
-	"github.com/theraphim/sockcast-proto/pkg/auth"
-	"github.com/theraphim/sockcast-server/internal/config"
-	"github.com/theraphim/sockcast-server/internal/hub"
+	sshcastv1 "stingr.net/go/sshcast-proto/gen/go/sshcast/v1"
+	"stingr.net/go/sshcast-proto/pkg/auth"
+	"stingr.net/go/sshcast-server/internal/config"
+	"stingr.net/go/sshcast-server/internal/hub"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-type SockcastServer struct {
-	sockcastv1.UnimplementedSockcastServiceServer
+type SshcastServer struct {
+	sshcastv1.UnimplementedSshcastServiceServer
 	cfg      *config.Config
 	registry *hub.Registry
 }
 
-func New(cfg *config.Config, registry *hub.Registry) *SockcastServer {
-	return &SockcastServer{
+func New(cfg *config.Config, registry *hub.Registry) *SshcastServer {
+	return &SshcastServer{
 		cfg:      cfg,
 		registry: registry,
 	}
 }
 
-func (s *SockcastServer) verifyCaller(nodeAuth *sockcastv1.NodeAuth, role sockcastv1.NodeRole) (string, string, []byte, error) {
+func (s *SshcastServer) verifyCaller(nodeAuth *sshcastv1.NodeAuth, role sshcastv1.NodeRole) (string, string, []byte, error) {
 	nowMs := uint64(time.Now().UnixMilli())
 	if err := auth.VerifyNodeAuth(nodeAuth, role, nowMs, s.cfg.MaxClockSkewMs); err != nil {
 		return "", "", nil, status.Errorf(codes.Unauthenticated, "authentication failed: %v", err)
@@ -42,24 +42,24 @@ func (s *SockcastServer) verifyCaller(nodeAuth *sockcastv1.NodeAuth, role sockca
 	return canonicalUserID, grant.GetNodeId(), grant.GetUserPubkey(), nil
 }
 
-func (s *SockcastServer) GetIdentities(ctx context.Context, req *sockcastv1.GetIdentitiesRequest) (*sockcastv1.GetIdentitiesResponse, error) {
+func (s *SshcastServer) GetIdentities(ctx context.Context, req *sshcastv1.GetIdentitiesRequest) (*sshcastv1.GetIdentitiesResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing request")
 	}
-	userID, nodeID, _, err := s.verifyCaller(req.GetAuth(), sockcastv1.NodeRole_NODE_ROLE_RELAY)
+	userID, nodeID, _, err := s.verifyCaller(req.GetAuth(), sshcastv1.NodeRole_NODE_ROLE_RELAY)
 	if err != nil {
 		return nil, err
 	}
 	keys := s.registry.GetIdentities(userID)
 	log.Printf("[grpc] GetIdentities from relay=%s user=%s -> %d key(s)", nodeID, userID, len(keys))
-	return &sockcastv1.GetIdentitiesResponse{Keys: keys}, nil
+	return &sshcastv1.GetIdentitiesResponse{Keys: keys}, nil
 }
 
-func (s *SockcastServer) Sign(ctx context.Context, req *sockcastv1.SignRequest) (*sockcastv1.SignResponse, error) {
+func (s *SshcastServer) Sign(ctx context.Context, req *sshcastv1.SignRequest) (*sshcastv1.SignResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing sign request")
 	}
-	userID, nodeID, callerUserPubkey, err := s.verifyCaller(req.GetAuth(), sockcastv1.NodeRole_NODE_ROLE_RELAY)
+	userID, nodeID, callerUserPubkey, err := s.verifyCaller(req.GetAuth(), sshcastv1.NodeRole_NODE_ROLE_RELAY)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func (s *SockcastServer) Sign(ctx context.Context, req *sockcastv1.SignRequest) 
 	resp, err := s.registry.RouteSignRequest(ctx, userID, req)
 	if err != nil {
 		log.Printf("[grpc] Sign request=%s failed after %dms: %v", req.GetRequestId(), time.Since(tStart).Milliseconds(), err)
-		return &sockcastv1.SignResponse{
+		return &sshcastv1.SignResponse{
 			RequestId:    req.GetRequestId(),
 			Approved:     false,
 			ErrorMessage: err.Error(),
@@ -92,15 +92,15 @@ func (s *SockcastServer) Sign(ctx context.Context, req *sockcastv1.SignRequest) 
 
 type workstationStream interface {
 	Context() context.Context
-	Send(*sockcastv1.ServerStreamMessage) error
-	Recv() (*sockcastv1.ClientStreamMessage, error)
+	Send(*sshcastv1.ServerStreamMessage) error
+	Recv() (*sshcastv1.ClientStreamMessage, error)
 }
 
-func (s *SockcastServer) ConnectWorkstation(stream grpc.BidiStreamingServer[sockcastv1.ClientStreamMessage, sockcastv1.ServerStreamMessage]) error {
+func (s *SshcastServer) ConnectWorkstation(stream grpc.BidiStreamingServer[sshcastv1.ClientStreamMessage, sshcastv1.ServerStreamMessage]) error {
 	return s.serveWorkstationStream(stream, "grpc")
 }
 
-func (s *SockcastServer) serveWorkstationStream(stream workstationStream, transportLabel string) error {
+func (s *SshcastServer) serveWorkstationStream(stream workstationStream, transportLabel string) error {
 	firstMsg, err := stream.Recv()
 	if err != nil {
 		return err
@@ -110,7 +110,7 @@ func (s *SockcastServer) serveWorkstationStream(stream workstationStream, transp
 		return status.Error(codes.Unauthenticated, "first message on ConnectWorkstation stream must be auth_handshake")
 	}
 
-	userID, nodeID, _, err := s.verifyCaller(handshake, sockcastv1.NodeRole_NODE_ROLE_CLIENT)
+	userID, nodeID, _, err := s.verifyCaller(handshake, sshcastv1.NodeRole_NODE_ROLE_CLIENT)
 	if err != nil {
 		return err
 	}
@@ -124,8 +124,8 @@ func (s *SockcastServer) serveWorkstationStream(stream workstationStream, transp
 	log.Printf("[%s] Workstation connected: node=%s user=%s", transportLabel, nodeID, userID)
 
 	// Send immediate heartbeat frame so client knows authentication succeeded.
-	if err := stream.Send(&sockcastv1.ServerStreamMessage{
-		Payload: &sockcastv1.ServerStreamMessage_ServerHeartbeatEpochMs{
+	if err := stream.Send(&sshcastv1.ServerStreamMessage{
+		Payload: &sshcastv1.ServerStreamMessage_ServerHeartbeatEpochMs{
 			ServerHeartbeatEpochMs: uint64(time.Now().UnixMilli()),
 		},
 	}); err != nil {
@@ -155,8 +155,8 @@ func (s *SockcastServer) serveWorkstationStream(stream workstationStream, transp
 					return
 				}
 			case t := <-ticker.C:
-				if err := stream.Send(&sockcastv1.ServerStreamMessage{
-					Payload: &sockcastv1.ServerStreamMessage_ServerHeartbeatEpochMs{
+				if err := stream.Send(&sshcastv1.ServerStreamMessage{
+					Payload: &sshcastv1.ServerStreamMessage_ServerHeartbeatEpochMs{
 						ServerHeartbeatEpochMs: uint64(t.UnixMilli()),
 					},
 				}); err != nil {
@@ -185,21 +185,21 @@ func (s *SockcastServer) serveWorkstationStream(stream workstationStream, transp
 		}
 
 		switch p := msg.GetPayload().(type) {
-		case *sockcastv1.ClientStreamMessage_Status:
+		case *sshcastv1.ClientStreamMessage_Status:
 			s.registry.UpdateWorkstationStatus(ws, p.Status)
-		case *sockcastv1.ClientStreamMessage_SignAck:
+		case *sshcastv1.ClientStreamMessage_SignAck:
 			s.registry.HandleSignAck(userID, nodeID, p.SignAck)
-		case *sockcastv1.ClientStreamMessage_SignResponse:
+		case *sshcastv1.ClientStreamMessage_SignResponse:
 			s.registry.HandleSignResponse(userID, nodeID, p.SignResponse)
-		case *sockcastv1.ClientStreamMessage_RequestZellijHosts:
+		case *sshcastv1.ClientStreamMessage_RequestZellijHosts:
 			s.registry.SendZellijHostsToWorkstation(ws, p.RequestZellijHosts)
-		case *sockcastv1.ClientStreamMessage_ZellijFrame:
+		case *sshcastv1.ClientStreamMessage_ZellijFrame:
 			s.registry.RouteZellijFrameFromClient(userID, nodeID, p.ZellijFrame)
 		}
 	}
 }
 
-func (s *SockcastServer) ConnectRelay(stream grpc.BidiStreamingServer[sockcastv1.RelayStreamMessage, sockcastv1.ServerToRelayMessage]) error {
+func (s *SshcastServer) ConnectRelay(stream grpc.BidiStreamingServer[sshcastv1.RelayStreamMessage, sshcastv1.ServerToRelayMessage]) error {
 	firstMsg, err := stream.Recv()
 	if err != nil {
 		return err
@@ -209,7 +209,7 @@ func (s *SockcastServer) ConnectRelay(stream grpc.BidiStreamingServer[sockcastv1
 		return status.Error(codes.Unauthenticated, "first message on ConnectRelay stream must be auth_handshake")
 	}
 
-	userID, nodeID, _, err := s.verifyCaller(handshake, sockcastv1.NodeRole_NODE_ROLE_RELAY)
+	userID, nodeID, _, err := s.verifyCaller(handshake, sshcastv1.NodeRole_NODE_ROLE_RELAY)
 	if err != nil {
 		return err
 	}
@@ -222,8 +222,8 @@ func (s *SockcastServer) ConnectRelay(stream grpc.BidiStreamingServer[sockcastv1
 
 	log.Printf("[grpc] Relay Zellij stream connected: node=%s user=%s", nodeID, userID)
 
-	if err := stream.Send(&sockcastv1.ServerToRelayMessage{
-		Payload: &sockcastv1.ServerToRelayMessage_ServerHeartbeatEpochMs{
+	if err := stream.Send(&sshcastv1.ServerToRelayMessage{
+		Payload: &sshcastv1.ServerToRelayMessage_ServerHeartbeatEpochMs{
 			ServerHeartbeatEpochMs: uint64(time.Now().UnixMilli()),
 		},
 	}); err != nil {
@@ -250,8 +250,8 @@ func (s *SockcastServer) ConnectRelay(stream grpc.BidiStreamingServer[sockcastv1
 					return
 				}
 			case t := <-ticker.C:
-				if err := stream.Send(&sockcastv1.ServerToRelayMessage{
-					Payload: &sockcastv1.ServerToRelayMessage_ServerHeartbeatEpochMs{
+				if err := stream.Send(&sshcastv1.ServerToRelayMessage{
+					Payload: &sshcastv1.ServerToRelayMessage_ServerHeartbeatEpochMs{
 						ServerHeartbeatEpochMs: uint64(t.UnixMilli()),
 					},
 				}); err != nil {
@@ -280,9 +280,9 @@ func (s *SockcastServer) ConnectRelay(stream grpc.BidiStreamingServer[sockcastv1
 		}
 
 		switch p := msg.GetPayload().(type) {
-		case *sockcastv1.RelayStreamMessage_ZellijStatus:
+		case *sshcastv1.RelayStreamMessage_ZellijStatus:
 			s.registry.UpdateRelayZellijStatus(rs, p.ZellijStatus)
-		case *sockcastv1.RelayStreamMessage_ZellijFrame:
+		case *sshcastv1.RelayStreamMessage_ZellijFrame:
 			s.registry.RouteZellijFrameFromRelay(userID, nodeID, p.ZellijFrame)
 		}
 	}

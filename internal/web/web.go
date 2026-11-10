@@ -37,7 +37,7 @@ func Handler(customDir string) http.Handler {
 			return
 		}
 
-		// 1. Check optional custom directory override on disk (e.g. for custom sockcast_proto.wasm)
+		// 1. Check optional custom directory override on disk (e.g. for custom sshcast_proto.wasm)
 		if customDir != "" {
 			diskPath := filepath.Join(customDir, filepath.FromSlash(rel))
 			if info, err := os.Stat(diskPath); err == nil && !info.IsDir() {
@@ -47,9 +47,9 @@ func Handler(customDir string) http.Handler {
 			}
 		}
 
-		// 2. Special handling for sockcast_wasm.wasm stored as assets/sockcast_wasm.wasm.gz
-		if rel == "sockcast_wasm.wasm" {
-			gzBytes, err := embeddedAssets.ReadFile("assets/sockcast_wasm.wasm.gz")
+		// 2. Special handling for sshcast_wasm.wasm stored as assets/sshcast_wasm.wasm.gz
+		if rel == "sshcast_wasm.wasm" {
+			gzBytes, err := embeddedAssets.ReadFile("assets/sshcast_wasm.wasm.gz")
 			if err != nil {
 				http.NotFound(w, r)
 				return

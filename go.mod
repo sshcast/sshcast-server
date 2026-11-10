@@ -1,10 +1,10 @@
-module github.com/theraphim/sockcast-server
+module stingr.net/go/sshcast-server
 
 go 1.27.3
 
 require (
 	github.com/BurntSushi/toml v1.5.0
-	github.com/theraphim/sockcast-proto v0.1.1
+	stingr.net/go/sshcast-proto v0.1.1
 	golang.org/x/net v0.60.0
 	google.golang.org/grpc v1.85.0
 )
@@ -15,3 +15,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260817212433-ac3dfec99bb1 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
+
+replace stingr.net/go/sshcast-proto => ../sshcast-proto

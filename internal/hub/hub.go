@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	sockcastv1 "github.com/theraphim/sockcast-proto/gen/go/sockcast/v1"
+	sshcastv1 "stingr.net/go/sshcast-proto/gen/go/sshcast/v1"
 )
 
 var (
@@ -26,11 +26,11 @@ type WorkstationSession struct {
 	LastInputEpochMs uint64
 	ForceActive      bool
 	ConnectedAt      time.Time
-	SendCh           chan *sockcastv1.ServerStreamMessage
+	SendCh           chan *sshcastv1.ServerStreamMessage
 	DoneCh           chan struct{}
 }
 
-func (ws *WorkstationSession) TrySend(msg *sockcastv1.ServerStreamMessage) bool {
+func (ws *WorkstationSession) TrySend(msg *sshcastv1.ServerStreamMessage) bool {
 	select {
 	case <-ws.DoneCh:
 		return false
@@ -46,7 +46,7 @@ func (ws *WorkstationSession) TrySend(msg *sockcastv1.ServerStreamMessage) bool 
 	}
 }
 
-func (ws *WorkstationSession) SendReliable(msg *sockcastv1.ServerStreamMessage) bool {
+func (ws *WorkstationSession) SendReliable(msg *sshcastv1.ServerStreamMessage) bool {
 	select {
 	case ws.SendCh <- msg:
 		return true
@@ -61,12 +61,12 @@ type RelaySession struct {
 	UserID      string
 	NodeID      string
 	ConnectedAt time.Time
-	Status      *sockcastv1.RelayZellijStatus
-	SendCh      chan *sockcastv1.ServerToRelayMessage
+	Status      *sshcastv1.RelayZellijStatus
+	SendCh      chan *sshcastv1.ServerToRelayMessage
 	DoneCh      chan struct{}
 }
 
-func (rs *RelaySession) TrySend(msg *sockcastv1.ServerToRelayMessage) bool {
+func (rs *RelaySession) TrySend(msg *sshcastv1.ServerToRelayMessage) bool {
 	select {
 	case <-rs.DoneCh:
 		return false
@@ -82,7 +82,7 @@ func (rs *RelaySession) TrySend(msg *sockcastv1.ServerToRelayMessage) bool {
 	}
 }
 
-func (rs *RelaySession) SendReliable(msg *sockcastv1.ServerToRelayMessage) bool {
+func (rs *RelaySession) SendReliable(msg *sshcastv1.ServerToRelayMessage) bool {
 	select {
 	case rs.SendCh <- msg:
 		return true
@@ -94,9 +94,9 @@ func (rs *RelaySession) SendReliable(msg *sockcastv1.ServerToRelayMessage) bool 
 }
 
 type pendingSignRequest struct {
-	req              *sockcastv1.SignRequest
+	req              *sshcastv1.SignRequest
 	ackCh            chan string
-	respCh           chan *sockcastv1.SignResponse
+	respCh           chan *sshcastv1.SignResponse
 	promptedNodes    map[string]uint64 // node_id -> last_input_epoch_ms at prompt time
 	highestInputSeen uint64
 }
@@ -104,7 +104,7 @@ type pendingSignRequest struct {
 type UserHub struct {
 	mu           sync.Mutex
 	userID       string
-	cachedKeys   []*sockcastv1.PublicKey
+	cachedKeys   []*sshcastv1.PublicKey
 	workstations map[string]*WorkstationSession
 	relays       map[string]*RelaySession
 	pending      map[string]*pendingSignRequest
@@ -160,7 +160,7 @@ func (r *Registry) RegisterWorkstation(userID, nodeID string) *WorkstationSessio
 		UserID:      userID,
 		NodeID:      nodeID,
 		ConnectedAt: time.Now(),
-		SendCh:      make(chan *sockcastv1.ServerStreamMessage, 2048),
+		SendCh:      make(chan *sshcastv1.ServerStreamMessage, 2048),
 		DoneCh:      make(chan struct{}),
 	}
 	uh.workstations[nodeID] = ws
@@ -187,7 +187,7 @@ func (r *Registry) UnregisterWorkstation(ws *WorkstationSession) {
 // UpdateWorkstationStatus updates presence metadata and cached public keys for a workstation.
 // If any pending SignRequests are waiting for human approval and this workstation just became newly active,
 // the SignRequest is also forwarded to this workstation.
-func (r *Registry) UpdateWorkstationStatus(ws *WorkstationSession, status *sockcastv1.WorkstationStatus) {
+func (r *Registry) UpdateWorkstationStatus(ws *WorkstationSession, status *sshcastv1.WorkstationStatus) {
 	if status == nil {
 		return
 	}
@@ -203,7 +203,7 @@ func (r *Registry) UpdateWorkstationStatus(ws *WorkstationSession, status *sockc
 	// Always update cached keys when status is pushed (allows empty list if user filtered all keys,
 	// or non-empty list when keys are present).
 	if status.Keys != nil {
-		cloned := make([]*sockcastv1.PublicKey, len(status.Keys))
+		cloned := make([]*sshcastv1.PublicKey, len(status.Keys))
 		copy(cloned, status.Keys)
 		uh.cachedKeys = cloned
 	}
@@ -215,8 +215,8 @@ func (r *Registry) UpdateWorkstationStatus(ws *WorkstationSession, status *sockc
 			continue
 		}
 		if ws.ForceActive || (ws.LastInputEpochMs > 0 && ws.LastInputEpochMs > p.highestInputSeen) {
-			if ws.TrySend(&sockcastv1.ServerStreamMessage{
-				Payload: &sockcastv1.ServerStreamMessage_SignRequest{
+			if ws.TrySend(&sshcastv1.ServerStreamMessage{
+				Payload: &sshcastv1.ServerStreamMessage_SignRequest{
 					SignRequest: p.req,
 				},
 			}) {
@@ -230,18 +230,18 @@ func (r *Registry) UpdateWorkstationStatus(ws *WorkstationSession, status *sockc
 }
 
 // GetIdentities returns the latest cached public keys for userID.
-func (r *Registry) GetIdentities(userID string) []*sockcastv1.PublicKey {
+func (r *Registry) GetIdentities(userID string) []*sshcastv1.PublicKey {
 	uh := r.getOrCreateUserHub(userID)
 	uh.mu.Lock()
 	defer uh.mu.Unlock()
 
-	out := make([]*sockcastv1.PublicKey, len(uh.cachedKeys))
+	out := make([]*sshcastv1.PublicKey, len(uh.cachedKeys))
 	copy(out, uh.cachedKeys)
 	return out
 }
 
 // HandleSignAck records an immediate SignAck from a workstation.
-func (r *Registry) HandleSignAck(userID, nodeID string, ack *sockcastv1.SignAck) {
+func (r *Registry) HandleSignAck(userID, nodeID string, ack *sshcastv1.SignAck) {
 	if ack == nil {
 		return
 	}
@@ -259,7 +259,7 @@ func (r *Registry) HandleSignAck(userID, nodeID string, ack *sockcastv1.SignAck)
 }
 
 // HandleSignResponse delivers a workstation's SignResponse to the waiting RPC handler.
-func (r *Registry) HandleSignResponse(userID, nodeID string, resp *sockcastv1.SignResponse) {
+func (r *Registry) HandleSignResponse(userID, nodeID string, resp *sshcastv1.SignResponse) {
 	if resp == nil {
 		return
 	}
@@ -299,7 +299,7 @@ func (uh *UserHub) sortedCandidatesLocked() []*WorkstationSession {
 
 // RouteSignRequest routes a SignRequest to the user's most recently active workstation using the
 // two-phase 1.5s SignAck receipt + 60s SignResponse approval protocol.
-func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *sockcastv1.SignRequest) (*sockcastv1.SignResponse, error) {
+func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *sshcastv1.SignRequest) (*sshcastv1.SignResponse, error) {
 	uh := r.getOrCreateUserHub(userID)
 
 	uh.mu.Lock()
@@ -312,7 +312,7 @@ func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *soc
 	p := &pendingSignRequest{
 		req:           req,
 		ackCh:         make(chan string, 8),
-		respCh:        make(chan *sockcastv1.SignResponse, 4),
+		respCh:        make(chan *sshcastv1.SignResponse, 4),
 		promptedNodes: make(map[string]uint64),
 	}
 	uh.pending[req.GetRequestId()] = p
@@ -330,9 +330,9 @@ func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *soc
 				continue
 			}
 			if ws, ok := uh.workstations[nodeID]; ok {
-				ws.TrySend(&sockcastv1.ServerStreamMessage{
-					Payload: &sockcastv1.ServerStreamMessage_CancelSignRequest{
-						CancelSignRequest: &sockcastv1.CancelSignRequest{
+				ws.TrySend(&sshcastv1.ServerStreamMessage{
+					Payload: &sshcastv1.ServerStreamMessage_CancelSignRequest{
+						CancelSignRequest: &sshcastv1.CancelSignRequest{
 							RequestId: req.GetRequestId(),
 							Reason:    "Handled or cancelled",
 						},
@@ -345,8 +345,8 @@ func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *soc
 	acked := false
 	for _, ws := range candidates {
 		uh.mu.Lock()
-		sent := ws.TrySend(&sockcastv1.ServerStreamMessage{
-			Payload: &sockcastv1.ServerStreamMessage_SignRequest{
+		sent := ws.TrySend(&sshcastv1.ServerStreamMessage{
+			Payload: &sshcastv1.ServerStreamMessage_SignRequest{
 				SignRequest: req,
 			},
 		})
@@ -425,7 +425,7 @@ func (r *Registry) RegisterRelay(userID, nodeID string) *RelaySession {
 		UserID:      userID,
 		NodeID:      nodeID,
 		ConnectedAt: time.Now(),
-		SendCh:      make(chan *sockcastv1.ServerToRelayMessage, 2048),
+		SendCh:      make(chan *sshcastv1.ServerToRelayMessage, 2048),
 		DoneCh:      make(chan struct{}),
 	}
 	uh.relays[nodeID] = rs
@@ -450,8 +450,8 @@ func (r *Registry) UnregisterRelay(rs *RelaySession) {
 	}
 }
 
-func (uh *UserHub) buildZellijHostListLocked() *sockcastv1.ZellijHostList {
-	hosts := make([]*sockcastv1.RelayZellijStatus, 0, len(uh.relays))
+func (uh *UserHub) buildZellijHostListLocked() *sshcastv1.ZellijHostList {
+	hosts := make([]*sshcastv1.RelayZellijStatus, 0, len(uh.relays))
 	for _, rs := range uh.relays {
 		if rs.Status != nil && rs.Status.GetZellijEnabled() {
 			hosts = append(hosts, rs.Status)
@@ -460,13 +460,13 @@ func (uh *UserHub) buildZellijHostListLocked() *sockcastv1.ZellijHostList {
 	sort.Slice(hosts, func(i, j int) bool {
 		return hosts[i].GetNodeId() < hosts[j].GetNodeId()
 	})
-	return &sockcastv1.ZellijHostList{Hosts: hosts}
+	return &sshcastv1.ZellijHostList{Hosts: hosts}
 }
 
 func (uh *UserHub) broadcastZellijHostListLocked() {
 	list := uh.buildZellijHostListLocked()
-	msg := &sockcastv1.ServerStreamMessage{
-		Payload: &sockcastv1.ServerStreamMessage_ZellijHostList{
+	msg := &sshcastv1.ServerStreamMessage{
+		Payload: &sshcastv1.ServerStreamMessage_ZellijHostList{
 			ZellijHostList: list,
 		},
 	}
@@ -476,7 +476,7 @@ func (uh *UserHub) broadcastZellijHostListLocked() {
 }
 
 // UpdateRelayZellijStatus updates the Zellij session discovery status for a connected relay and notifies workstations.
-func (r *Registry) UpdateRelayZellijStatus(rs *RelaySession, status *sockcastv1.RelayZellijStatus) {
+func (r *Registry) UpdateRelayZellijStatus(rs *RelaySession, status *sshcastv1.RelayZellijStatus) {
 	if status == nil {
 		return
 	}
@@ -484,9 +484,9 @@ func (r *Registry) UpdateRelayZellijStatus(rs *RelaySession, status *sockcastv1.
 	uh.mu.Lock()
 	defer uh.mu.Unlock()
 
-	clonedSessions := make([]*sockcastv1.ZellijSessionInfo, len(status.GetSessions()))
+	clonedSessions := make([]*sshcastv1.ZellijSessionInfo, len(status.GetSessions()))
 	copy(clonedSessions, status.GetSessions())
-	rs.Status = &sockcastv1.RelayZellijStatus{
+	rs.Status = &sshcastv1.RelayZellijStatus{
 		NodeId:          rs.NodeID,
 		ZellijEnabled:   status.GetZellijEnabled(),
 		Sessions:        clonedSessions,
@@ -503,16 +503,16 @@ func (r *Registry) SendZellijHostsToWorkstation(ws *WorkstationSession, askRelay
 
 	list := uh.buildZellijHostListLocked()
 	if askRelaysToRefresh || len(list.GetHosts()) > 0 {
-		ws.TrySend(&sockcastv1.ServerStreamMessage{
-			Payload: &sockcastv1.ServerStreamMessage_ZellijHostList{
+		ws.TrySend(&sshcastv1.ServerStreamMessage{
+			Payload: &sshcastv1.ServerStreamMessage_ZellijHostList{
 				ZellijHostList: list,
 			},
 		})
 	}
 
 	if askRelaysToRefresh {
-		refreshMsg := &sockcastv1.ServerToRelayMessage{
-			Payload: &sockcastv1.ServerToRelayMessage_RefreshSessions{
+		refreshMsg := &sshcastv1.ServerToRelayMessage{
+			Payload: &sshcastv1.ServerToRelayMessage_RefreshSessions{
 				RefreshSessions: true,
 			},
 		}
@@ -550,7 +550,7 @@ func (uh *UserHub) findRelayLocked(target string) *RelaySession {
 }
 
 // RouteZellijFrameFromClient routes a ZellijTunnelFrame from a workstation to the target relay.
-func (r *Registry) RouteZellijFrameFromClient(userID, clientNodeID string, frame *sockcastv1.ZellijTunnelFrame) {
+func (r *Registry) RouteZellijFrameFromClient(userID, clientNodeID string, frame *sshcastv1.ZellijTunnelFrame) {
 	if frame == nil {
 		return
 	}
@@ -561,14 +561,14 @@ func (r *Registry) RouteZellijFrameFromClient(userID, clientNodeID string, frame
 	if rs == nil {
 		ws := uh.workstations[clientNodeID]
 		uh.mu.Unlock()
-		if frame.GetFrameType() == sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_OPEN && ws != nil {
-			ws.SendReliable(&sockcastv1.ServerStreamMessage{
-				Payload: &sockcastv1.ServerStreamMessage_ZellijFrame{
-					ZellijFrame: &sockcastv1.ZellijTunnelFrame{
+		if frame.GetFrameType() == sshcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_OPEN && ws != nil {
+			ws.SendReliable(&sshcastv1.ServerStreamMessage{
+				Payload: &sshcastv1.ServerStreamMessage_ZellijFrame{
+					ZellijFrame: &sshcastv1.ZellijTunnelFrame{
 						TunnelId:     frame.GetTunnelId(),
 						RelayNodeId:  frame.GetRelayNodeId(),
 						ClientNodeId: clientNodeID,
-						FrameType:    sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_CLOSE,
+						FrameType:    sshcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_CLOSE,
 						ErrorMessage: fmt.Sprintf("relay %q is not online with Zellij enabled", frame.GetRelayNodeId()),
 					},
 				},
@@ -579,15 +579,15 @@ func (r *Registry) RouteZellijFrameFromClient(userID, clientNodeID string, frame
 
 	frame.RelayNodeId = rs.NodeID
 	uh.mu.Unlock()
-	rs.SendReliable(&sockcastv1.ServerToRelayMessage{
-		Payload: &sockcastv1.ServerToRelayMessage_ZellijFrame{
+	rs.SendReliable(&sshcastv1.ServerToRelayMessage{
+		Payload: &sshcastv1.ServerToRelayMessage_ZellijFrame{
 			ZellijFrame: frame,
 		},
 	})
 }
 
 // RouteZellijFrameFromRelay routes a ZellijTunnelFrame from a relay to the target workstation.
-func (r *Registry) RouteZellijFrameFromRelay(userID, relayNodeID string, frame *sockcastv1.ZellijTunnelFrame) {
+func (r *Registry) RouteZellijFrameFromRelay(userID, relayNodeID string, frame *sshcastv1.ZellijTunnelFrame) {
 	if frame == nil {
 		return
 	}
@@ -599,8 +599,8 @@ func (r *Registry) RouteZellijFrameFromRelay(userID, relayNodeID string, frame *
 	if !ok {
 		return
 	}
-	ws.SendReliable(&sockcastv1.ServerStreamMessage{
-		Payload: &sockcastv1.ServerStreamMessage_ZellijFrame{
+	ws.SendReliable(&sshcastv1.ServerStreamMessage{
+		Payload: &sshcastv1.ServerStreamMessage_ZellijFrame{
 			ZellijFrame: frame,
 		},
 	})

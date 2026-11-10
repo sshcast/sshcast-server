@@ -1,0 +1,22 @@
+[Unit]
+Description=Sshcast Coordinator Server (Roaming SSH Agent Router)
+Documentation=https://github.com/theraphim/sshcast-server
+After=network-online.target sshcast-server.socket
+Wants=network-online.target sshcast-server.socket
+
+[Service]
+Type=simple
+DynamicUser=yes
+ConfigurationDirectory=sshcast::ro
+ConfigurationDirectoryMode=0755
+ExecStart=/usr/bin/sshcast-server --config ${CONFIGURATION_DIRECTORY}/server.toml
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
+Also=sshcast-server.socket

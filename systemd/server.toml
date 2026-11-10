@@ -1,9 +1,9 @@
-# Sockcast Coordinator Server Configuration (/etc/sockcast/server.toml)
+# Sshcast Coordinator Server Configuration (/etc/sshcast/server.toml)
 
 # Fallback listen address when NOT using systemd socket activation (LISTEN_FDS).
-# Under systemd, enable sockcast-server.socket (/run/sockcast/server.sock for Nginx)
-# and/or sockcast-server-tcp@<port>.socket (127.0.0.1:<port> for Cloudflare Tunnel).
-listen_addr = "unix:/run/sockcast/server.sock"
+# Under systemd, enable sshcast-server.socket (/run/sshcast/server.sock for Nginx)
+# and/or sshcast-server-tcp@<port>.socket (127.0.0.1:<port> for Cloudflare Tunnel).
+listen_addr = "unix:/run/sshcast/server.sock"
 
 # Optional TLS certificate & key (leave empty for h2c cleartext HTTP/2 behind Nginx/Cloudflare)
 tls_cert_file = ""
@@ -12,7 +12,7 @@ tls_key_file = ""
 # Set to true only for testing or private open networks; otherwise specify allowed_user_pubkeys
 allow_any_user = false
 
-# List of allowed User Root Ed25519 public keys (hex or base64 or sc_pub_... produced by sockcast-client keygen)
+# List of allowed User Root Ed25519 public keys (hex or base64 or sc_pub_... produced by sshcast-client keygen)
 allowed_user_pubkeys = [
   # "sc_pub_..."
 ]

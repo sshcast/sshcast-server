@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	sockcastv1 "github.com/theraphim/sockcast-proto/gen/go/sockcast/v1"
-	"github.com/theraphim/sockcast-proto/pkg/auth"
-	"github.com/theraphim/sockcast-server/internal/config"
-	"github.com/theraphim/sockcast-server/internal/hub"
-	"github.com/theraphim/sockcast-server/internal/web"
+	sshcastv1 "stingr.net/go/sshcast-proto/gen/go/sshcast/v1"
+	"stingr.net/go/sshcast-proto/pkg/auth"
+	"stingr.net/go/sshcast-server/internal/config"
+	"stingr.net/go/sshcast-server/internal/hub"
+	"stingr.net/go/sshcast-server/internal/web"
 	"golang.org/x/net/websocket"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -29,9 +29,9 @@ func keypair(seedByte byte) (ed25519.PublicKey, ed25519.PrivateKey) {
 	return priv.Public().(ed25519.PublicKey), priv
 }
 
-func makeSignedGrantAndAuth(t *testing.T, userPriv ed25519.PrivateKey, nodePub ed25519.PublicKey, nodePriv ed25519.PrivateKey, nodeID string, role sockcastv1.NodeRole) (*sockcastv1.NodeGrant, *sockcastv1.NodeAuth) {
+func makeSignedGrantAndAuth(t *testing.T, userPriv ed25519.PrivateKey, nodePub ed25519.PublicKey, nodePriv ed25519.PrivateKey, nodeID string, role sshcastv1.NodeRole) (*sshcastv1.NodeGrant, *sshcastv1.NodeAuth) {
 	t.Helper()
-	grant := &sockcastv1.NodeGrant{
+	grant := &sshcastv1.NodeGrant{
 		NodeId:          nodeID,
 		Role:            role,
 		NodePubkey:      nodePub,
@@ -40,7 +40,7 @@ func makeSignedGrantAndAuth(t *testing.T, userPriv ed25519.PrivateKey, nodePub e
 	if err := auth.SignNodeGrant(grant, userPriv); err != nil {
 		t.Fatalf("SignNodeGrant: %v", err)
 	}
-	nodeAuth := &sockcastv1.NodeAuth{
+	nodeAuth := &sshcastv1.NodeAuth{
 		Grant:           grant,
 		TimestampUnixMs: uint64(time.Now().UnixMilli()),
 		Nonce:           []byte{1, 2, 3, 4, 5, 6, 7, 8},
@@ -73,7 +73,7 @@ func TestSignAckFailoverAndIdentities(t *testing.T) {
 		t.Fatalf("Listen: %v", err)
 	}
 	grpcServer := grpc.NewServer()
-	sockcastv1.RegisterSockcastServiceServer(grpcServer, srv)
+	sshcastv1.RegisterSshcastServiceServer(grpcServer, srv)
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()
@@ -84,19 +84,19 @@ func TestSignAckFailoverAndIdentities(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	defer conn.Close()
-	client := sockcastv1.NewSockcastServiceClient(conn)
+	client := sshcastv1.NewSshcastServiceClient(conn)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Connect Workstation 1 (macbook-asleep: higher last_input_epoch_ms, but will NOT send SignAck)
-	_, ws1Auth := makeSignedGrantAndAuth(t, userPriv, ws1Pub, ws1Priv, "macbook-asleep", sockcastv1.NodeRole_NODE_ROLE_CLIENT)
+	_, ws1Auth := makeSignedGrantAndAuth(t, userPriv, ws1Pub, ws1Priv, "macbook-asleep", sshcastv1.NodeRole_NODE_ROLE_CLIENT)
 	stream1, err := client.ConnectWorkstation(ctx)
 	if err != nil {
 		t.Fatalf("ConnectWorkstation 1: %v", err)
 	}
-	if err := stream1.Send(&sockcastv1.ClientStreamMessage{
-		Payload: &sockcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: ws1Auth},
+	if err := stream1.Send(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: ws1Auth},
 	}); err != nil {
 		t.Fatalf("stream1 Send handshake: %v", err)
 	}
@@ -104,12 +104,12 @@ func TestSignAckFailoverAndIdentities(t *testing.T) {
 	if _, err := stream1.Recv(); err != nil {
 		t.Fatalf("stream1 Recv heartbeat: %v", err)
 	}
-	if err := stream1.Send(&sockcastv1.ClientStreamMessage{
-		Payload: &sockcastv1.ClientStreamMessage_Status{
-			Status: &sockcastv1.WorkstationStatus{
+	if err := stream1.Send(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_Status{
+			Status: &sshcastv1.WorkstationStatus{
 				LastInputEpochMs: 2000,
 				Os:               "macos",
-				Keys: []*sockcastv1.PublicKey{
+				Keys: []*sshcastv1.PublicKey{
 					{KeyBlob: []byte("key-1"), Comment: "pavel@mac", KeyType: "ssh-ed25519"},
 				},
 			},
@@ -119,22 +119,22 @@ func TestSignAckFailoverAndIdentities(t *testing.T) {
 	}
 
 	// Connect Workstation 2 (win-desktop: lower last_input_epoch_ms=1000, WILL send SignAck and SignResponse)
-	_, ws2Auth := makeSignedGrantAndAuth(t, userPriv, ws2Pub, ws2Priv, "win-desktop", sockcastv1.NodeRole_NODE_ROLE_CLIENT)
+	_, ws2Auth := makeSignedGrantAndAuth(t, userPriv, ws2Pub, ws2Priv, "win-desktop", sshcastv1.NodeRole_NODE_ROLE_CLIENT)
 	stream2, err := client.ConnectWorkstation(ctx)
 	if err != nil {
 		t.Fatalf("ConnectWorkstation 2: %v", err)
 	}
-	if err := stream2.Send(&sockcastv1.ClientStreamMessage{
-		Payload: &sockcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: ws2Auth},
+	if err := stream2.Send(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: ws2Auth},
 	}); err != nil {
 		t.Fatalf("stream2 Send handshake: %v", err)
 	}
 	if _, err := stream2.Recv(); err != nil {
 		t.Fatalf("stream2 Recv heartbeat: %v", err)
 	}
-	if err := stream2.Send(&sockcastv1.ClientStreamMessage{
-		Payload: &sockcastv1.ClientStreamMessage_Status{
-			Status: &sockcastv1.WorkstationStatus{
+	if err := stream2.Send(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_Status{
+			Status: &sshcastv1.WorkstationStatus{
 				LastInputEpochMs: 1000,
 				Os:               "windows",
 			},
@@ -147,8 +147,8 @@ func TestSignAckFailoverAndIdentities(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	// Relay fetches identities
-	relayGrant, relayAuth := makeSignedGrantAndAuth(t, userPriv, relayPub, relayPriv, "server-x.local", sockcastv1.NodeRole_NODE_ROLE_RELAY)
-	idResp, err := client.GetIdentities(ctx, &sockcastv1.GetIdentitiesRequest{Auth: relayAuth})
+	relayGrant, relayAuth := makeSignedGrantAndAuth(t, userPriv, relayPub, relayPriv, "server-x.local", sshcastv1.NodeRole_NODE_ROLE_RELAY)
+	idResp, err := client.GetIdentities(ctx, &sshcastv1.GetIdentitiesRequest{Auth: relayAuth})
 	if err != nil {
 		t.Fatalf("GetIdentities: %v", err)
 	}
@@ -164,15 +164,15 @@ func TestSignAckFailoverAndIdentities(t *testing.T) {
 				return
 			}
 			if sr := msg.GetSignRequest(); sr != nil {
-				_ = stream2.Send(&sockcastv1.ClientStreamMessage{
-					Payload: &sockcastv1.ClientStreamMessage_SignAck{
-						SignAck: &sockcastv1.SignAck{RequestId: sr.GetRequestId()},
+				_ = stream2.Send(&sshcastv1.ClientStreamMessage{
+					Payload: &sshcastv1.ClientStreamMessage_SignAck{
+						SignAck: &sshcastv1.SignAck{RequestId: sr.GetRequestId()},
 					},
 				})
 				time.Sleep(40 * time.Millisecond)
-				_ = stream2.Send(&sockcastv1.ClientStreamMessage{
-					Payload: &sockcastv1.ClientStreamMessage_SignResponse{
-						SignResponse: &sockcastv1.SignResponse{
+				_ = stream2.Send(&sshcastv1.ClientStreamMessage{
+					Payload: &sshcastv1.ClientStreamMessage_SignResponse{
+						SignResponse: &sshcastv1.SignResponse{
 							RequestId:     sr.GetRequestId(),
 							Approved:      true,
 							SignatureBlob: []byte("valid-ssh-signature"),
@@ -185,12 +185,12 @@ func TestSignAckFailoverAndIdentities(t *testing.T) {
 	}()
 
 	// Relay sends SignRequest
-	signReq := &sockcastv1.SignRequest{
+	signReq := &sshcastv1.SignRequest{
 		RequestId:       "req-failover-1",
 		TimestampUnixMs: uint64(time.Now().UnixMilli()),
 		KeyBlob:         []byte("key-1"),
 		Data:            []byte("challenge"),
-		ProcessContext: &sockcastv1.ProcessContext{
+		ProcessContext: &sshcastv1.ProcessContext{
 			Hostname: "server-x.local",
 			Uid:      1000,
 			Pid:      1234,
@@ -244,7 +244,7 @@ func TestZellijHostDiscoveryAndTunnelRouting(t *testing.T) {
 		t.Fatalf("Listen: %v", err)
 	}
 	grpcServer := grpc.NewServer()
-	sockcastv1.RegisterSockcastServiceServer(grpcServer, srv)
+	sshcastv1.RegisterSshcastServiceServer(grpcServer, srv)
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()
@@ -255,19 +255,19 @@ func TestZellijHostDiscoveryAndTunnelRouting(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	defer conn.Close()
-	client := sockcastv1.NewSockcastServiceClient(conn)
+	client := sshcastv1.NewSshcastServiceClient(conn)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// 1. Connect Workstation
-	_, wsAuth := makeSignedGrantAndAuth(t, userPriv, wsPub, wsPriv, "workstation-1", sockcastv1.NodeRole_NODE_ROLE_CLIENT)
+	_, wsAuth := makeSignedGrantAndAuth(t, userPriv, wsPub, wsPriv, "workstation-1", sshcastv1.NodeRole_NODE_ROLE_CLIENT)
 	wsStream, err := client.ConnectWorkstation(ctx)
 	if err != nil {
 		t.Fatalf("ConnectWorkstation: %v", err)
 	}
-	if err := wsStream.Send(&sockcastv1.ClientStreamMessage{
-		Payload: &sockcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: wsAuth},
+	if err := wsStream.Send(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: wsAuth},
 	}); err != nil {
 		t.Fatalf("wsStream Send handshake: %v", err)
 	}
@@ -276,13 +276,13 @@ func TestZellijHostDiscoveryAndTunnelRouting(t *testing.T) {
 	}
 
 	// 2. Connect Relay with Zellij enabled
-	_, relayAuth := makeSignedGrantAndAuth(t, userPriv, relayPub, relayPriv, "sunduk.infra.local", sockcastv1.NodeRole_NODE_ROLE_RELAY)
+	_, relayAuth := makeSignedGrantAndAuth(t, userPriv, relayPub, relayPriv, "sunduk.infra.local", sshcastv1.NodeRole_NODE_ROLE_RELAY)
 	relayStream, err := client.ConnectRelay(ctx)
 	if err != nil {
 		t.Fatalf("ConnectRelay: %v", err)
 	}
-	if err := relayStream.Send(&sockcastv1.RelayStreamMessage{
-		Payload: &sockcastv1.RelayStreamMessage_AuthHandshake{AuthHandshake: relayAuth},
+	if err := relayStream.Send(&sshcastv1.RelayStreamMessage{
+		Payload: &sshcastv1.RelayStreamMessage_AuthHandshake{AuthHandshake: relayAuth},
 	}); err != nil {
 		t.Fatalf("relayStream Send handshake: %v", err)
 	}
@@ -291,12 +291,12 @@ func TestZellijHostDiscoveryAndTunnelRouting(t *testing.T) {
 	}
 
 	// 3. Relay publishes ZellijStatus -> Workstation automatically receives ZellijHostList
-	if err := relayStream.Send(&sockcastv1.RelayStreamMessage{
-		Payload: &sockcastv1.RelayStreamMessage_ZellijStatus{
-			ZellijStatus: &sockcastv1.RelayZellijStatus{
+	if err := relayStream.Send(&sshcastv1.RelayStreamMessage{
+		Payload: &sshcastv1.RelayStreamMessage_ZellijStatus{
+			ZellijStatus: &sshcastv1.RelayZellijStatus{
 				NodeId:        "sunduk.infra.local",
 				ZellijEnabled: true,
-				Sessions: []*sockcastv1.ZellijSessionInfo{
+				Sessions: []*sshcastv1.ZellijSessionInfo{
 					{Name: "dev", CreatedInfo: "10m ago", Exited: false},
 				},
 			},
@@ -315,12 +315,12 @@ func TestZellijHostDiscoveryAndTunnelRouting(t *testing.T) {
 	}
 
 	// 4. Workstation routes a ZellijTunnelFrame using short hostname "sunduk" -> Relay receives it
-	if err := wsStream.Send(&sockcastv1.ClientStreamMessage{
-		Payload: &sockcastv1.ClientStreamMessage_ZellijFrame{
-			ZellijFrame: &sockcastv1.ZellijTunnelFrame{
+	if err := wsStream.Send(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_ZellijFrame{
+			ZellijFrame: &sshcastv1.ZellijTunnelFrame{
 				TunnelId:    "stream-1",
 				RelayNodeId: "sunduk",
-				FrameType:   sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_OPEN,
+				FrameType:   sshcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_OPEN,
 				Payload:     []byte("GET /dev HTTP/1.1\r\n\r\n"),
 			},
 		},
@@ -337,12 +337,12 @@ func TestZellijHostDiscoveryAndTunnelRouting(t *testing.T) {
 	}
 
 	// 5. Relay replies with DATA frame -> Workstation receives it
-	if err := relayStream.Send(&sockcastv1.RelayStreamMessage{
-		Payload: &sockcastv1.RelayStreamMessage_ZellijFrame{
-			ZellijFrame: &sockcastv1.ZellijTunnelFrame{
+	if err := relayStream.Send(&sshcastv1.RelayStreamMessage{
+		Payload: &sshcastv1.RelayStreamMessage_ZellijFrame{
+			ZellijFrame: &sshcastv1.ZellijTunnelFrame{
 				TunnelId:     "stream-1",
 				ClientNodeId: "workstation-1",
-				FrameType:    sockcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_DATA,
+				FrameType:    sshcastv1.ZellijFrameType_ZELLIJ_FRAME_TYPE_DATA,
 				Payload:      []byte("HTTP/1.1 200 OK\r\n\r\n"),
 			},
 		},
@@ -375,7 +375,7 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 		t.Fatalf("Listen gRPC: %v", err)
 	}
 	grpcServer := grpc.NewServer()
-	sockcastv1.RegisterSockcastServiceServer(grpcServer, srv)
+	sshcastv1.RegisterSshcastServiceServer(grpcServer, srv)
 	go func() {
 		_ = grpcServer.Serve(grpcLis)
 	}()
@@ -388,16 +388,16 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	httpSrv := httptest.NewServer(mux)
 	defer httpSrv.Close()
 
-	// 1. Verify /web/ serves index.html, app.js, and the Rust sockcast-client sockcast_wasm.wasm binary
+	// 1. Verify /web/ serves index.html, app.js, and the Rust sshcast-client sshcast_wasm.wasm binary
 	respIndex, err := http.Get(httpSrv.URL + "/web/")
 	if err != nil || respIndex.StatusCode != http.StatusOK {
 		t.Fatalf("GET /web/ failed: status=%v err=%v", respIndex, err)
 	}
 	_ = respIndex.Body.Close()
 
-	respWasm, err := http.Get(httpSrv.URL + "/web/sockcast_wasm.wasm")
+	respWasm, err := http.Get(httpSrv.URL + "/web/sshcast_wasm.wasm")
 	if err != nil || respWasm.StatusCode != http.StatusOK {
-		t.Fatalf("GET /web/sockcast_wasm.wasm failed: status=%v err=%v", respWasm, err)
+		t.Fatalf("GET /web/sshcast_wasm.wasm failed: status=%v err=%v", respWasm, err)
 	}
 	if ct := respWasm.Header.Get("Content-Type"); ct != "application/wasm" {
 		t.Fatalf("expected Content-Type application/wasm, got %q", ct)
@@ -407,12 +407,12 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	if err != nil || len(wasmBytes) < 8 || !bytes.Equal(wasmBytes[:4], []byte{0x00, 0x61, 0x73, 0x6d}) {
 		t.Fatalf("expected valid WebAssembly binary magic header, got len=%d err=%v", len(wasmBytes), err)
 	}
-	if !bytes.Contains(wasmBytes, []byte("sockcast_wasm_call")) {
-		t.Fatalf("expected sockcast_wasm.wasm to export sockcast_wasm_call from sockcast-client")
+	if !bytes.Contains(wasmBytes, []byte("sshcast_wasm_call")) {
+		t.Fatalf("expected sshcast_wasm.wasm to export sshcast_wasm_call from sshcast-client")
 	}
 
 	// 2. Connect Browser WASM Workstation over WebSocket (/ws/workstation)
-	_, wsAuth := makeSignedGrantAndAuth(t, userPriv, wsPub, wsPriv, "chrome-wasm-node", sockcastv1.NodeRole_NODE_ROLE_CLIENT)
+	_, wsAuth := makeSignedGrantAndAuth(t, userPriv, wsPub, wsPriv, "chrome-wasm-node", sshcastv1.NodeRole_NODE_ROLE_CLIENT)
 
 	wsURL := "ws://" + strings.TrimPrefix(httpSrv.URL, "http://") + "/ws/workstation"
 	wsConn, err := websocket.Dial(wsURL, "", httpSrv.URL)
@@ -421,7 +421,7 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	}
 	defer wsConn.Close()
 
-	sendClientFrame := func(msg *sockcastv1.ClientStreamMessage) {
+	sendClientFrame := func(msg *sshcastv1.ClientStreamMessage) {
 		t.Helper()
 		raw, err := proto.Marshal(msg)
 		if err != nil {
@@ -432,20 +432,20 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 		}
 	}
 
-	sendClientFrame(&sockcastv1.ClientStreamMessage{
-		Payload: &sockcastv1.ClientStreamMessage_AuthHandshake{
+	sendClientFrame(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_AuthHandshake{
 			AuthHandshake: wsAuth,
 		},
 	})
 
 	testKeyBlob := []byte("ssh-ed25519-test-key-blob-for-ws")
-	sendClientFrame(&sockcastv1.ClientStreamMessage{
-		Payload: &sockcastv1.ClientStreamMessage_Status{
-			Status: &sockcastv1.WorkstationStatus{
+	sendClientFrame(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_Status{
+			Status: &sshcastv1.WorkstationStatus{
 				LastInputEpochMs: uint64(time.Now().UnixMilli()),
 				ForceActive:      true,
 				Os:               "browser-wasm",
-				Keys: []*sockcastv1.PublicKey{
+				Keys: []*sshcastv1.PublicKey{
 					{
 						KeyBlob:           testKeyBlob,
 						KeyType:           "ssh-ed25519",
@@ -464,19 +464,19 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 			if err := websocket.Message.Receive(wsConn, &raw); err != nil {
 				return
 			}
-			var srvMsg sockcastv1.ServerStreamMessage
+			var srvMsg sshcastv1.ServerStreamMessage
 			if err := proto.Unmarshal(raw, &srvMsg); err != nil {
 				return
 			}
 			if sr := srvMsg.GetSignRequest(); sr != nil {
-				sendClientFrame(&sockcastv1.ClientStreamMessage{
-					Payload: &sockcastv1.ClientStreamMessage_SignAck{
-						SignAck: &sockcastv1.SignAck{RequestId: sr.GetRequestId()},
+				sendClientFrame(&sshcastv1.ClientStreamMessage{
+					Payload: &sshcastv1.ClientStreamMessage_SignAck{
+						SignAck: &sshcastv1.SignAck{RequestId: sr.GetRequestId()},
 					},
 				})
-				sendClientFrame(&sockcastv1.ClientStreamMessage{
-					Payload: &sockcastv1.ClientStreamMessage_SignResponse{
-						SignResponse: &sockcastv1.SignResponse{
+				sendClientFrame(&sshcastv1.ClientStreamMessage{
+					Payload: &sshcastv1.ClientStreamMessage_SignResponse{
+						SignResponse: &sshcastv1.SignResponse{
 							RequestId:       sr.GetRequestId(),
 							Approved:        true,
 							SignatureBlob:   bytes.Repeat([]byte{0xab}, 64),
@@ -497,13 +497,13 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 		t.Fatalf("grpc.NewClient: %v", err)
 	}
 	defer grpcConn.Close()
-	relayClient := sockcastv1.NewSockcastServiceClient(grpcConn)
+	relayClient := sshcastv1.NewSshcastServiceClient(grpcConn)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	relayGrant, relayAuth := makeSignedGrantAndAuth(t, userPriv, relayPub, relayPriv, "bastion.infra.local", sockcastv1.NodeRole_NODE_ROLE_RELAY)
-	idResp, err := relayClient.GetIdentities(ctx, &sockcastv1.GetIdentitiesRequest{Auth: relayAuth})
+	relayGrant, relayAuth := makeSignedGrantAndAuth(t, userPriv, relayPub, relayPriv, "bastion.infra.local", sshcastv1.NodeRole_NODE_ROLE_RELAY)
+	idResp, err := relayClient.GetIdentities(ctx, &sshcastv1.GetIdentitiesRequest{Auth: relayAuth})
 	if err != nil {
 		t.Fatalf("GetIdentities: %v", err)
 	}
@@ -511,12 +511,12 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 		t.Fatalf("expected 1 key from WASM workstation, got %+v", idResp.GetKeys())
 	}
 
-	signReq := &sockcastv1.SignRequest{
+	signReq := &sshcastv1.SignRequest{
 		RequestId:       "req-browser-ws-1",
 		TimestampUnixMs: uint64(time.Now().UnixMilli()),
 		KeyBlob:         idResp.GetKeys()[0].GetKeyBlob(),
 		Data:            []byte("ssh-userauth-challenge-data"),
-		ProcessContext: &sockcastv1.ProcessContext{
+		ProcessContext: &sshcastv1.ProcessContext{
 			Hostname: "bastion.infra.local",
 			Uid:      1000,
 			Pid:      4321,

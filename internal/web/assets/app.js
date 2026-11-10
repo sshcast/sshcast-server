@@ -1,12 +1,12 @@
-// Sockcast Browser Workstation (WASM + WebSocket Client)
-// Supports both Rust wasm32-unknown-unknown (sockcast_proto.wasm) and Go wasm (sockcast_wasm.wasm).
+// Sshcast Browser Workstation (WASM + WebSocket Client)
+// Supports both Rust wasm32-unknown-unknown (sshcast_proto.wasm) and Go wasm (sshcast_wasm.wasm).
 
 (() => {
   "use strict";
 
-  const STORAGE_BUNDLE_KEY = "sockcast_wasm_bundle_v1";
-  const STORAGE_WS_URL_KEY = "sockcast_wasm_ws_url_v1";
-  const STORAGE_KEYS_KEY = "sockcast_wasm_ssh_keys_v1";
+  const STORAGE_BUNDLE_KEY = "sshcast_wasm_bundle_v1";
+  const STORAGE_WS_URL_KEY = "sshcast_wasm_ws_url_v1";
+  const STORAGE_KEYS_KEY = "sshcast_wasm_ssh_keys_v1";
 
   let wasmEngine = null; // { type: "rust-wasm" | "go-wasm", call(reqObj): respObj }
   let ws = null;
@@ -60,9 +60,9 @@
   }
 
   async function loadRustClientWasm() {
-    const resp = await fetch("./sockcast_wasm.wasm", { cache: "no-cache" });
+    const resp = await fetch("./sshcast_wasm.wasm", { cache: "no-cache" });
     if (!resp.ok) {
-      throw new Error(`Failed to fetch sockcast_wasm.wasm: HTTP ${resp.status}`);
+      throw new Error(`Failed to fetch sshcast_wasm.wasm: HTTP ${resp.status}`);
     }
     const buf = await resp.arrayBuffer();
     const magic = new Uint8Array(buf, 0, 4);
@@ -73,27 +73,27 @@
       magic[2] !== 0x73 ||
       magic[3] !== 0x6d
     ) {
-      throw new Error("Invalid WebAssembly magic header in sockcast_wasm.wasm");
+      throw new Error("Invalid WebAssembly magic header in sshcast_wasm.wasm");
     }
     const { instance } = await WebAssembly.instantiate(buf, {});
     const ex = instance.exports;
     if (
-      typeof ex.sockcast_wasm_alloc !== "function" ||
-      typeof ex.sockcast_wasm_call !== "function"
+      typeof ex.sshcast_wasm_alloc !== "function" ||
+      typeof ex.sshcast_wasm_call !== "function"
     ) {
-      throw new Error("sockcast_wasm.wasm is missing sockcast-client FFI exports");
+      throw new Error("sshcast_wasm.wasm is missing sshcast-client FFI exports");
     }
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     return {
-      type: "rust-wasm (sockcast-client)",
+      type: "rust-wasm (sshcast-client)",
       call(reqObj) {
         const reqBytes = encoder.encode(JSON.stringify(reqObj));
-        const ptr = ex.sockcast_wasm_alloc(reqBytes.length);
+        const ptr = ex.sshcast_wasm_alloc(reqBytes.length);
         new Uint8Array(ex.memory.buffer, ptr, reqBytes.length).set(reqBytes);
-        const resLen = ex.sockcast_wasm_call(ptr, reqBytes.length);
-        ex.sockcast_wasm_free(ptr, reqBytes.length);
-        const resPtr = ex.sockcast_wasm_result_ptr();
+        const resLen = ex.sshcast_wasm_call(ptr, reqBytes.length);
+        ex.sshcast_wasm_free(ptr, reqBytes.length);
+        const resPtr = ex.sshcast_wasm_result_ptr();
         const resBytes = new Uint8Array(ex.memory.buffer, resPtr, resLen);
         return JSON.parse(decoder.decode(resBytes));
       },
