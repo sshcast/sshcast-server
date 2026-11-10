@@ -157,27 +157,30 @@ func deriveWSURL(serverURL string) string {
 	return "wss://" + trimmed + "/ws/workstation"
 }
 
+func baseToolName(comm string) string {
+	trimmed := strings.TrimSpace(comm)
+	parts := strings.Split(trimmed, "/")
+	return strings.TrimLeft(parts[len(parts)-1], "-")
+}
+
 func extractPrimaryTool(pc *sockcastv1.ProcessContext) (string, string) {
 	if pc == nil {
 		return "ssh", ""
 	}
-	shells := map[string]bool{
-		"sh": true, "bash": true, "zsh": true, "fish": true, "dash": true,
-		"ksh": true, "tcsh": true, "csh": true, "sshd": true, "systemd": true,
-		"init": true, "tmux": true, "zellij": true, "screen": true,
-	}
-	for _, anc := range pc.GetAncestors() {
-		parts := strings.Split(anc.GetComm(), "/")
-		base := strings.TrimLeft(parts[len(parts)-1], "-")
-		if base != "" && !shells[base] && base != "ssh" {
-			cmd := strings.TrimSpace(anc.GetCmdline())
+	leafComm := baseToolName(pc.GetComm())
+	if leafComm == "ssh" && len(pc.GetAncestors()) > 0 {
+		parent := pc.GetAncestors()[0]
+		pcomm := baseToolName(parent.GetComm())
+		switch pcomm {
+		case "scp", "rsync", "git", "git-remote-ext", "sftp", "borg", "restic", "ansible-playbook":
+			cmd := strings.TrimSpace(parent.GetCmdline())
 			if cmd == "" {
-				cmd = anc.GetComm()
+				cmd = pcomm
 			}
-			return base, cmd
+			return pcomm, cmd
 		}
 	}
-	comm := strings.TrimSpace(pc.GetComm())
+	comm := leafComm
 	if comm == "" {
 		comm = "ssh"
 	}

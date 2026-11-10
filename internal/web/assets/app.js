@@ -570,12 +570,15 @@
     updatePendingBadge();
 
     const r = activePromptReq;
+    const fullCmd = r.primary_cmdline || r.cmdline || r.comm;
     $("req-host").textContent = r.verified_node_id || r.hostname;
     $("req-target-user").textContent = r.is_userauth_request
       ? `${r.target_username} (${r.service_name || "ssh-connection"})`
       : "Raw Challenge (Non-userauth)";
-    $("req-tool").textContent = r.primary_tool;
-    $("req-cmdline").textContent = r.primary_cmdline || r.cmdline || r.comm;
+    $("req-tool").textContent = fullCmd && fullCmd !== r.primary_tool
+      ? `${r.primary_tool} (${fullCmd})`
+      : r.primary_tool;
+    $("req-cmdline").textContent = fullCmd;
     $("req-cwd").textContent = r.cwd || "(unknown)";
     $("req-proc").textContent = `${r.comm} (pid=${r.pid}, uid=${r.uid})`;
     $("req-key").textContent = r.key_comment
