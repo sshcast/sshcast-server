@@ -34,10 +34,25 @@ type decodedBundle struct {
 
 func decodeBundle(token string) (*decodedBundle, error) {
 	token = strings.TrimSpace(token)
+	for _, field := range strings.Fields(token) {
+		if strings.HasPrefix(field, bundlePrefix) {
+			token = field
+			break
+		}
+	}
+	token = strings.Map(func(r rune) rune {
+		if r == ' ' || r == '\n' || r == '\r' || r == '\t' {
+			return -1
+		}
+		return r
+	}, token)
+	if idx := strings.Index(token, ".rk_"); idx != -1 {
+		token = token[:idx]
+	}
 	if !strings.HasPrefix(token, bundlePrefix) {
 		return nil, fmt.Errorf("enrollment bundle must start with %q", bundlePrefix)
 	}
-	b64Part := strings.TrimPrefix(token, bundlePrefix)
+	b64Part := strings.TrimRight(strings.TrimPrefix(token, bundlePrefix), "=")
 	jsonBytes, err := base64.RawURLEncoding.DecodeString(b64Part)
 	if err != nil {
 		return nil, fmt.Errorf("base64 decode error: %w", err)

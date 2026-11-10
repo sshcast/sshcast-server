@@ -423,7 +423,7 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal bundle wire: %v", err)
 	}
-	bundleToken := "sc1_" + base64.RawURLEncoding.EncodeToString(wireJSON)
+	bundleToken := "sc1_" + base64.RawURLEncoding.EncodeToString(wireJSON) + ".rk_" + base64.RawURLEncoding.EncodeToString(userPriv.Seed())
 
 	tmpDir := t.TempDir()
 	keyPath := filepath.Join(tmpDir, "id_ed25519_wasm")
