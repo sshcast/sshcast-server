@@ -35,8 +35,6 @@ install -D -m 0644 systemd/sshcast-server-tcp@.socket %{buildroot}%{_unitdir}/ss
 install -D -m 0644 systemd/server.toml %{buildroot}%{_sysconfdir}/sshcast/server.toml
 
 %post
-chmod 0755 %{_sysconfdir}/sshcast 2>/dev/null || :
-chmod 0644 %{_sysconfdir}/sshcast/server.toml 2>/dev/null || :
 %systemd_post sshcast-server.socket sshcast-server.service
 
 %preun
