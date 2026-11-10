@@ -6,31 +6,33 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
+	"github.com/alecthomas/kong"
+	"github.com/pelletier/go-toml/v2"
 	sshcastv1 "stingr.net/go/sshcast-proto/gen/go/sshcast/v1"
 	"stingr.net/go/sshcast-proto/pkg/auth"
 )
 
 type Config struct {
-	ListenAddr             string   `toml:"listen_addr"`
-	TLSCertFile            string   `toml:"tls_cert_file"`
-	TLSKeyFile             string   `toml:"tls_key_file"`
-	AllowAnyUser           bool     `toml:"allow_any_user"`
-	AllowedUserPubkeys     []string `toml:"allowed_user_pubkeys"`
-	TrustedOperatorPubkeys []string `toml:"trusted_operator_pubkeys"`
-	SignAckTimeoutMs       uint64   `toml:"sign_ack_timeout_ms"`
-	SignResponseTimeoutMs  uint64   `toml:"sign_response_timeout_ms"`
-	HeartbeatIntervalMs    uint64   `toml:"heartbeat_interval_ms"`
-	MaxClockSkewMs         uint64   `toml:"max_clock_skew_ms"`
-	WebDir                 string   `toml:"web_dir"`
+	ListenAddr             string   `toml:"listen_addr" name:"listen" aliases:"listen-addr" default:"127.0.0.1:8080" help:"Listen address override when not socket-activated (e.g. unix:/run/sshcast/server.sock or 127.0.0.1:8080)."`
+	TLSCertFile            string   `toml:"tls_cert_file" name:"tls-cert" aliases:"tls-cert-file" help:"Optional TLS certificate file (leave empty for h2c behind Nginx/Cloudflare)."`
+	TLSKeyFile             string   `toml:"tls_key_file" name:"tls-key" aliases:"tls-key-file" help:"Optional TLS private key file."`
+	AllowAnyUser           bool     `toml:"allow_any_user" name:"allow-any-user" default:"false" help:"Allow any valid Ed25519 user root key without allowlist check."`
+	AllowedUserPubkeys     []string `toml:"allowed_user_pubkeys" name:"allow-user-pubkey" aliases:"allowed-user-pubkeys" sep:"none" help:"Allowed user Ed25519 public key (hex or base64, repeatable)."`
+	TrustedOperatorPubkeys []string `toml:"trusted_operator_pubkeys" name:"trusted-operator-pubkey" aliases:"trusted-operator-pubkeys" sep:"none" help:"Trusted operator Ed25519 public key (sc_op_pub_<hex>, hex, or base64, repeatable)."`
+	SignAckTimeoutMs       uint64   `toml:"sign_ack_timeout_ms" name:"sign-ack-timeout-ms" default:"1500" help:"Fast failover acknowledgment timeout in milliseconds."`
+	SignResponseTimeoutMs  uint64   `toml:"sign_response_timeout_ms" name:"sign-response-timeout-ms" default:"60000" help:"Human TouchID/FIDO2 approval timeout in milliseconds."`
+	HeartbeatIntervalMs    uint64   `toml:"heartbeat_interval_ms" name:"heartbeat-interval-ms" default:"25000" help:"Stream heartbeat interval in milliseconds."`
+	MaxClockSkewMs         uint64   `toml:"max_clock_skew_ms" name:"max-clock-skew-ms" default:"300000" help:"Maximum allowed clock skew in milliseconds."`
+	WebDir                 string   `toml:"web_dir" name:"web-dir" help:"Optional custom directory for /web/ static assets (e.g. custom sshcast_proto.wasm)."`
 
-	parsedAllowedKeys  [][]byte
-	parsedOperatorKeys [][]byte
+	parsedAllowedKeys  [][]byte `toml:"-" kong:"-"`
+	parsedOperatorKeys [][]byte `toml:"-" kong:"-"`
 }
 
 func Default() *Config {
@@ -44,13 +46,54 @@ func Default() *Config {
 	}
 }
 
+// DefaultPaths returns default server.toml search paths (such as $CONFIGURATION_DIRECTORY/server.toml).
+func DefaultPaths() []string {
+	var paths []string
+	if confDir := strings.TrimSpace(os.Getenv("CONFIGURATION_DIRECTORY")); confDir != "" {
+		paths = append(paths, filepath.Join(strings.Split(confDir, ":")[0], "server.toml"))
+	}
+	paths = append(paths, "/etc/sshcast/server.toml")
+	return paths
+}
+
+// TOML returns a Kong Resolver that loads configuration values from a TOML reader using go-toml/v2.
+func TOML(r io.Reader) (kong.Resolver, error) {
+	values := map[string]any{}
+	if err := toml.NewDecoder(r).Decode(&values); err != nil {
+		return nil, err
+	}
+	var f kong.ResolverFunc = func(context *kong.Context, parent *kong.Path, flag *kong.Flag) (any, error) {
+		if tomlKey := strings.Split(flag.Tag.Get("toml"), ",")[0]; tomlKey != "" && tomlKey != "-" {
+			if raw, ok := values[tomlKey]; ok {
+				return raw, nil
+			}
+		}
+		name := strings.ReplaceAll(flag.Name, "-", "_")
+		if raw, ok := values[name]; ok {
+			return raw, nil
+		}
+		for _, alias := range flag.Aliases {
+			if raw, ok := values[strings.ReplaceAll(alias, "-", "_")]; ok {
+				return raw, nil
+			}
+		}
+		return nil, nil
+	}
+	return f, nil
+}
+
+// Validate implements kong's validation hook and compiles allowed user/operator public keys.
+func (c *Config) Validate() error {
+	return c.CompileAllowedKeys()
+}
+
 func Load(path string) (*Config, error) {
 	cfg := Default()
 	if path == "" {
-		if confDir := strings.TrimSpace(os.Getenv("CONFIGURATION_DIRECTORY")); confDir != "" {
-			candidate := filepath.Join(strings.Split(confDir, ":")[0], "server.toml")
+		for _, candidate := range DefaultPaths() {
 			if _, err := os.Stat(candidate); err == nil {
 				path = candidate
+				break
 			}
 		}
 	}
@@ -59,7 +102,7 @@ func Load(path string) (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read config %q: %w", path, err)
 		}
-		if _, err := toml.Decode(string(data), cfg); err != nil {
+		if err := toml.Unmarshal(data, cfg); err != nil {
 			return nil, fmt.Errorf("parse config %q: %w", path, err)
 		}
 	}

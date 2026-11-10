@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -14,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alecthomas/kong"
 	"github.com/coreos/go-systemd/v22/activation"
 	"github.com/coreos/go-systemd/v22/daemon"
 	sshcastv1 "stingr.net/go/sshcast-proto/gen/go/sshcast/v1"
@@ -27,12 +27,9 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
-type stringSliceFlag []string
-
-func (s *stringSliceFlag) String() string { return strings.Join(*s, ",") }
-func (s *stringSliceFlag) Set(val string) error {
-	*s = append(*s, val)
-	return nil
+type cli struct {
+	ConfigFile    kong.ConfigFlag `name:"config" help:"Path to server.toml configuration file." placeholder:"PATH"`
+	config.Config `embed:""`
 }
 
 // acquireStandaloneListener opens a Unix domain socket (if addr starts with "unix:" or "/")
@@ -56,46 +53,13 @@ func acquireStandaloneListener(addr string) (net.Listener, error) {
 }
 
 func main() {
-	var (
-		configPath   = flag.String("config", "", "Path to server.toml configuration file")
-		listenAddr   = flag.String("listen", "", "Listen address override when not socket-activated (e.g. unix:/run/sshcast/server.sock or 127.0.0.1:8080)")
-		tlsCertFile  = flag.String("tls-cert", "", "Optional TLS certificate file (leave empty for h2c behind Nginx/Cloudflare)")
-		tlsKeyFile   = flag.String("tls-key", "", "Optional TLS private key file")
-		webDir       = flag.String("web-dir", "", "Optional custom directory for /web/ static assets (e.g. custom sshcast_proto.wasm)")
-		allowAnyUser     = flag.Bool("allow-any-user", false, "Allow any valid Ed25519 user root key without allowlist check")
-		allowedUsers     stringSliceFlag
-		trustedOperators stringSliceFlag
+	var cliArgs cli
+	kong.Parse(&cliArgs,
+		kong.Name("sshcast-server"),
+		kong.Description("Sshcast Coordinator Server (Roaming SSH Agent Router)"),
+		kong.Configuration(config.TOML, config.DefaultPaths()...),
 	)
-	flag.Var(&allowedUsers, "allow-user-pubkey", "Allowed user Ed25519 public key (hex or base64, repeatable)")
-	flag.Var(&trustedOperators, "trusted-operator-pubkey", "Trusted operator Ed25519 public key (sc_op_pub_<hex>, hex, or base64, repeatable)")
-	flag.Parse()
-
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
-	if *listenAddr != "" {
-		cfg.ListenAddr = *listenAddr
-	}
-	if *tlsCertFile != "" {
-		cfg.TLSCertFile = *tlsCertFile
-	}
-	if *tlsKeyFile != "" {
-		cfg.TLSKeyFile = *tlsKeyFile
-	}
-	if *webDir != "" {
-		cfg.WebDir = *webDir
-	}
-	if *allowAnyUser {
-		cfg.AllowAnyUser = true
-	}
-	if len(allowedUsers) > 0 || len(trustedOperators) > 0 {
-		cfg.AllowedUserPubkeys = append(cfg.AllowedUserPubkeys, allowedUsers...)
-		cfg.TrustedOperatorPubkeys = append(cfg.TrustedOperatorPubkeys, trustedOperators...)
-		if err := cfg.CompileAllowedKeys(); err != nil {
-			log.Fatalf("Invalid public key flag: %v", err)
-		}
-	}
+	cfg := &cliArgs.Config
 
 	if !cfg.AllowAnyUser && len(cfg.AllowedUserPubkeys) == 0 && len(cfg.TrustedOperatorPubkeys) == 0 {
 		log.Printf("[warn] Neither allow_any_user, trusted_operator_pubkeys, nor allowed_user_pubkeys is configured; all requests will be denied until configured.")
