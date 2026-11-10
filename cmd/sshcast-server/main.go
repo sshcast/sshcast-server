@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	kongtoml "github.com/alecthomas/kong-toml"
 	"github.com/coreos/go-systemd/v22/activation"
 	"github.com/coreos/go-systemd/v22/daemon"
 	sshcastv1 "stingr.net/go/sshcast-proto/gen/go/sshcast/v1"
@@ -57,7 +58,7 @@ func main() {
 	kong.Parse(&cliArgs,
 		kong.Name("sshcast-server"),
 		kong.Description("Sshcast Coordinator Server (Roaming SSH Agent Router)"),
-		kong.Configuration(config.TOML, config.DefaultPaths()...),
+		kong.Configuration(kongtoml.Loader, config.DefaultPaths()...),
 	)
 	cfg := &cliArgs.Config
 

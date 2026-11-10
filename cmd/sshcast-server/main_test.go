@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/alecthomas/kong"
-	"stingr.net/go/sshcast-server/internal/config"
+	kongtoml "github.com/alecthomas/kong-toml"
 )
 
 func TestAcquireStandaloneListenerUnixAndTCP(t *testing.T) {
@@ -55,7 +55,7 @@ trusted_operator_pubkeys = ["sc_op_pub_` + opHex + `"]
 	}
 
 	var parsed cli
-	parser, err := kong.New(&parsed, kong.Configuration(config.TOML))
+	parser, err := kong.New(&parsed, kong.Configuration(kongtoml.Loader))
 	if err != nil {
 		t.Fatalf("kong.New: %v", err)
 	}
