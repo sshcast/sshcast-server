@@ -677,7 +677,13 @@ func (e *Engine) callMap(req map[string]any) map[string]any {
 			}
 		}
 
-		sigBlob := matchingKey.SignSSHData(signReq.GetData(), signReq.GetFlags())
+		sigBlob, err := matchingKey.SignSSHData(signReq.GetData(), signReq.GetFlags())
+		if err != nil {
+			return map[string]any{
+				"ok":    false,
+				"error": fmt.Sprintf("Signing failed: %v", err),
+			}
+		}
 		respMsg := &sockcastv1.ClientStreamMessage{
 			Payload: &sockcastv1.ClientStreamMessage_SignResponse{
 				SignResponse: &sockcastv1.SignResponse{

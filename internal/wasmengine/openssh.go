@@ -2,14 +2,23 @@ package wasmengine
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ed25519"
+	"crypto/md5"
+	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha512"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"math/bits"
 	"strings"
 
@@ -19,15 +28,19 @@ import (
 const (
 	sshMsgUserauthRequest = 50
 	opensshAuthMagic      = "openssh-key-v1\x00"
+
+	sshAgentRSASHA2_256 = 2
+	sshAgentRSASHA2_512 = 4
 )
 
 var (
 	ErrPassphraseRequired = errors.New("SSH private key is encrypted; a passphrase is required")
-	ErrInvalidPassphrase  = errors.New("invalid passphrase or corrupted SSH private key (checkint mismatch)")
+	ErrInvalidPassphrase  = errors.New("invalid passphrase or corrupted SSH private key")
 )
 
 type LoadedSshKey struct {
 	SigningKey ed25519.PrivateKey
+	RSAKey     *rsa.PrivateKey
 	PublicKey  *sockcastv1.PublicKey
 }
 
@@ -58,6 +71,14 @@ func readString(cursor *[]byte) (string, bool) {
 	return string(b), true
 }
 
+func readMpint(cursor *[]byte) (*big.Int, bool) {
+	b, ok := readBytes(cursor)
+	if !ok {
+		return nil, false
+	}
+	return new(big.Int).SetBytes(b), true
+}
+
 func writeSSHBytes(buf []byte, data []byte) []byte {
 	var lenBuf [4]byte
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(data)))
@@ -67,6 +88,25 @@ func writeSSHBytes(buf []byte, data []byte) []byte {
 
 func writeSSHString(buf []byte, s string) []byte {
 	return writeSSHBytes(buf, []byte(s))
+}
+
+func writeSSHMpint(buf []byte, n *big.Int) []byte {
+	if n.Sign() == 0 {
+		return writeSSHBytes(buf, nil)
+	}
+	b := n.Bytes()
+	if len(b) > 0 && (b[0]&0x80) != 0 {
+		b = append([]byte{0x00}, b...)
+	}
+	return writeSSHBytes(buf, b)
+}
+
+func encodeRSAPublicKeyBlob(pub *rsa.PublicKey) []byte {
+	var blob []byte
+	blob = writeSSHString(blob, "ssh-rsa")
+	blob = writeSSHMpint(blob, big.NewInt(int64(pub.E)))
+	blob = writeSSHMpint(blob, pub.N)
+	return blob
 }
 
 func ParsePublicKeyBlob(keyBlob []byte, comment string) *sockcastv1.PublicKey {
@@ -119,6 +159,13 @@ func ParseSshAuthContext(data []byte) *sockcastv1.SshAuthContext {
 }
 
 func ParseOpenSSHPEM(pemStr string, passphrase string, hasPassphrase bool) (*LoadedSshKey, error) {
+	trimmedPem := strings.TrimSpace(pemStr)
+	if strings.Contains(trimmedPem, "-----BEGIN RSA PRIVATE KEY-----") ||
+		strings.Contains(trimmedPem, "-----BEGIN PRIVATE KEY-----") ||
+		strings.Contains(trimmedPem, "-----BEGIN ENCRYPTED PRIVATE KEY-----") {
+		return parseClassicPEMPrivateKey(trimmedPem, passphrase, hasPassphrase)
+	}
+
 	var b64Body strings.Builder
 	inBody := false
 	foundEnd := false
@@ -139,7 +186,7 @@ func ParseOpenSSHPEM(pemStr string, passphrase string, hasPassphrase bool) (*Loa
 		}
 	}
 	if !inBody || !foundEnd {
-		return nil, errors.New("invalid OpenSSH private key format: missing BEGIN/END OPENSSH PRIVATE KEY markers")
+		return nil, errors.New("invalid SSH private key format: expected OPENSSH PRIVATE KEY, RSA PRIVATE KEY, or PRIVATE KEY PEM")
 	}
 
 	raw, err := base64.StdEncoding.DecodeString(b64Body.String())
@@ -193,40 +240,240 @@ func ParseOpenSSHPEM(pemStr string, passphrase string, hasPassphrase bool) (*Loa
 	if !ok {
 		return nil, errors.New("truncated key_type in private section")
 	}
-	if keyType != "ssh-ed25519" {
-		return nil, fmt.Errorf("unsupported SSH key type %q (supported: ssh-ed25519)", keyType)
-	}
-	pubBytes, ok1 := readBytes(&privCursor)
-	privBytes, ok2 := readBytes(&privCursor)
-	comment, ok3 := readString(&privCursor)
-	if !ok1 || !ok2 || !ok3 {
-		return nil, errors.New("truncated ed25519 key fields")
-	}
-	if len(pubBytes) != 32 || len(privBytes) != 64 {
-		return nil, errors.New("invalid ed25519 key lengths")
-	}
-	privKey := ed25519.NewKeyFromSeed(privBytes[:32])
-	derivedPub := privKey.Public().(ed25519.PublicKey)
-	if !bytes.Equal(derivedPub, pubBytes) || !bytes.Equal(privBytes[32:], pubBytes) {
-		return nil, errors.New("ed25519 public key does not match private key seed")
-	}
 
-	var keyBlob []byte
-	keyBlob = writeSSHString(keyBlob, "ssh-ed25519")
-	keyBlob = writeSSHBytes(keyBlob, pubBytes)
+	switch keyType {
+	case "ssh-ed25519":
+		pubBytes, ok1 := readBytes(&privCursor)
+		privBytes, ok2 := readBytes(&privCursor)
+		comment, ok3 := readString(&privCursor)
+		if !ok1 || !ok2 || !ok3 {
+			return nil, errors.New("truncated ed25519 key fields")
+		}
+		if len(pubBytes) != 32 || len(privBytes) != 64 {
+			return nil, errors.New("invalid ed25519 key lengths")
+		}
+		privKey := ed25519.NewKeyFromSeed(privBytes[:32])
+		derivedPub := privKey.Public().(ed25519.PublicKey)
+		if !bytes.Equal(derivedPub, pubBytes) || !bytes.Equal(privBytes[32:], pubBytes) {
+			return nil, errors.New("ed25519 public key does not match private key seed")
+		}
+		var keyBlob []byte
+		keyBlob = writeSSHString(keyBlob, "ssh-ed25519")
+		keyBlob = writeSSHBytes(keyBlob, pubBytes)
+		return &LoadedSshKey{
+			SigningKey: privKey,
+			PublicKey:  ParsePublicKeyBlob(keyBlob, comment),
+		}, nil
 
-	return &LoadedSshKey{
-		SigningKey: privKey,
-		PublicKey:  ParsePublicKeyBlob(keyBlob, comment),
-	}, nil
+	case "ssh-rsa":
+		n, ok1 := readMpint(&privCursor)
+		e, ok2 := readMpint(&privCursor)
+		d, ok3 := readMpint(&privCursor)
+		_, ok4 := readMpint(&privCursor) // iqmp
+		p, ok5 := readMpint(&privCursor)
+		q, ok6 := readMpint(&privCursor)
+		comment, ok7 := readString(&privCursor)
+		if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 {
+			return nil, errors.New("truncated ssh-rsa key fields in OpenSSH private key")
+		}
+		rsaPriv := &rsa.PrivateKey{
+			PublicKey: rsa.PublicKey{
+				N: n,
+				E: int(e.Int64()),
+			},
+			D:      d,
+			Primes: []*big.Int{p, q},
+		}
+		rsaPriv.Precompute()
+		if err := rsaPriv.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid ssh-rsa private key parameters: %w", err)
+		}
+		keyBlob := encodeRSAPublicKeyBlob(&rsaPriv.PublicKey)
+		return &LoadedSshKey{
+			RSAKey:    rsaPriv,
+			PublicKey: ParsePublicKeyBlob(keyBlob, comment),
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported SSH key type %q (supported: ssh-ed25519, ssh-rsa)", keyType)
+	}
 }
 
-func (k *LoadedSshKey) SignSSHData(data []byte, _ uint32) []byte {
+func parseClassicPEMPrivateKey(pemStr string, passphrase string, hasPassphrase bool) (*LoadedSshKey, error) {
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		return nil, errors.New("failed to decode PEM block")
+	}
+	der := block.Bytes
+	if procType := block.Headers["Proc-Type"]; strings.Contains(procType, "ENCRYPTED") {
+		if !hasPassphrase || passphrase == "" {
+			return nil, ErrPassphraseRequired
+		}
+		var err error
+		der, err = decryptLegacyPEMBlock(block, passphrase)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	switch block.Type {
+	case "RSA PRIVATE KEY":
+		rsaPriv, err := x509.ParsePKCS1PrivateKey(der)
+		if err != nil {
+			if block.Headers["Proc-Type"] != "" {
+				return nil, ErrInvalidPassphrase
+			}
+			return nil, fmt.Errorf("failed to parse PKCS#1 RSA private key: %w", err)
+		}
+		rsaPriv.Precompute()
+		keyBlob := encodeRSAPublicKeyBlob(&rsaPriv.PublicKey)
+		return &LoadedSshKey{
+			RSAKey:    rsaPriv,
+			PublicKey: ParsePublicKeyBlob(keyBlob, "rsa-pem-key"),
+		}, nil
+
+	case "PRIVATE KEY":
+		parsed, err := x509.ParsePKCS8PrivateKey(der)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse PKCS#8 private key: %w", err)
+		}
+		switch k := parsed.(type) {
+		case *rsa.PrivateKey:
+			k.Precompute()
+			keyBlob := encodeRSAPublicKeyBlob(&k.PublicKey)
+			return &LoadedSshKey{
+				RSAKey:    k,
+				PublicKey: ParsePublicKeyBlob(keyBlob, "rsa-pkcs8-key"),
+			}, nil
+		case ed25519.PrivateKey:
+			pub := k.Public().(ed25519.PublicKey)
+			var keyBlob []byte
+			keyBlob = writeSSHString(keyBlob, "ssh-ed25519")
+			keyBlob = writeSSHBytes(keyBlob, pub)
+			return &LoadedSshKey{
+				SigningKey: k,
+				PublicKey:  ParsePublicKeyBlob(keyBlob, "ed25519-pkcs8-key"),
+			}, nil
+		default:
+			return nil, fmt.Errorf("unsupported PKCS#8 private key type %T", parsed)
+		}
+
+	default:
+		return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
+	}
+}
+
+func decryptLegacyPEMBlock(block *pem.Block, passphrase string) ([]byte, error) {
+	dekInfo := block.Headers["DEK-Info"]
+	parts := strings.Split(dekInfo, ",")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid DEK-Info header %q", dekInfo)
+	}
+	alg := strings.ToUpper(strings.TrimSpace(parts[0]))
+	iv, err := hex.DecodeString(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return nil, fmt.Errorf("invalid DEK-Info IV hex: %w", err)
+	}
+	var keyLen int
+	switch alg {
+	case "AES-128-CBC":
+		keyLen = 16
+	case "AES-192-CBC":
+		keyLen = 24
+	case "AES-256-CBC":
+		keyLen = 32
+	default:
+		return nil, fmt.Errorf("unsupported encrypted PEM cipher %q (supported: AES-128/192/256-CBC or OPENSSH PRIVATE KEY)", alg)
+	}
+	if len(iv) != aes.BlockSize || len(block.Bytes)%aes.BlockSize != 0 {
+		return nil, errors.New("invalid AES-CBC IV or ciphertext length in encrypted PEM")
+	}
+
+	// OpenSSL EVP_BytesToKey with MD5 and 8-byte salt (iv[:8])
+	salt := iv[:8]
+	var key []byte
+	var prev []byte
+	for len(key) < keyLen {
+		h := md5.New()
+		h.Write(prev)
+		h.Write([]byte(passphrase))
+		h.Write(salt)
+		prev = h.Sum(nil)
+		key = append(key, prev...)
+	}
+	c, err := aes.NewCipher(key[:keyLen])
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, len(block.Bytes))
+	cipher.NewCBCDecrypter(c, iv).CryptBlocks(out, block.Bytes)
+	if len(out) == 0 {
+		return nil, ErrInvalidPassphrase
+	}
+	padLen := int(out[len(out)-1])
+	if padLen == 0 || padLen > aes.BlockSize || padLen > len(out) {
+		return nil, ErrInvalidPassphrase
+	}
+	for i := len(out) - padLen; i < len(out); i++ {
+		if int(out[i]) != padLen {
+			return nil, ErrInvalidPassphrase
+		}
+	}
+	return out[:len(out)-padLen], nil
+}
+
+func (k *LoadedSshKey) SignSSHData(data []byte, flags uint32) ([]byte, error) {
+	if k.RSAKey != nil {
+		var sigAlgo string
+		var hashFunc crypto.Hash
+		var digest []byte
+
+		if (flags & sshAgentRSASHA2_512) != 0 {
+			sigAlgo = "rsa-sha2-512"
+			hashFunc = crypto.SHA512
+			sum := sha512.Sum512(data)
+			digest = sum[:]
+		} else if (flags & sshAgentRSASHA2_256) != 0 {
+			sigAlgo = "rsa-sha2-256"
+			hashFunc = crypto.SHA256
+			sum := sha256.Sum256(data)
+			digest = sum[:]
+		} else {
+			parsedCtx := ParseSshAuthContext(data)
+			switch parsedCtx.GetPubkeyAlgorithm() {
+			case "rsa-sha2-512":
+				sigAlgo = "rsa-sha2-512"
+				hashFunc = crypto.SHA512
+				sum := sha512.Sum512(data)
+				digest = sum[:]
+			case "rsa-sha2-256":
+				sigAlgo = "rsa-sha2-256"
+				hashFunc = crypto.SHA256
+				sum := sha256.Sum256(data)
+				digest = sum[:]
+			default:
+				sigAlgo = "ssh-rsa"
+				hashFunc = crypto.SHA1
+				sum := sha1.Sum(data)
+				digest = sum[:]
+			}
+		}
+
+		sig, err := rsa.SignPKCS1v15(nil, k.RSAKey, hashFunc, digest)
+		if err != nil {
+			return nil, err
+		}
+		var out []byte
+		out = writeSSHString(out, sigAlgo)
+		out = writeSSHBytes(out, sig)
+		return out, nil
+	}
+
 	sig := ed25519.Sign(k.SigningKey, data)
 	var out []byte
 	out = writeSSHString(out, "ssh-ed25519")
 	out = writeSSHBytes(out, sig)
-	return out
+	return out, nil
 }
 
 func decryptOpenSSHPrivateSection(ciphername, kdfname string, kdfoptions []byte, passphrase string, ciphertext []byte) ([]byte, error) {

@@ -466,6 +466,25 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 		t.Fatalf("add_ssh_key failed: %+v", rKey)
 	}
 
+	// Also verify RSA keys (both OpenSSH format and classic BEGIN RSA PRIVATE KEY PEM format)
+	rsaOpenSSHPath := filepath.Join(tmpDir, "id_rsa_openssh")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "rsa", "-b", "2048", "-N", "", "-C", "rsa@chrome", "-f", rsaOpenSSHPath).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen rsa openssh failed: %v: %s", err, string(out))
+	}
+	rsaOpenSSHPem, _ := os.ReadFile(rsaOpenSSHPath)
+	if r := callWasm(map[string]any{"op": "add_ssh_key", "pem": string(rsaOpenSSHPem)}); r["ok"] != true {
+		t.Fatalf("add_ssh_key (rsa openssh) failed: %+v", r)
+	}
+
+	rsaPEMPath := filepath.Join(tmpDir, "id_rsa_pem")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "rsa", "-b", "2048", "-m", "PEM", "-N", "", "-f", rsaPEMPath).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen rsa pem failed: %v: %s", err, string(out))
+	}
+	rsaPEMBytes, _ := os.ReadFile(rsaPEMPath)
+	if r := callWasm(map[string]any{"op": "add_ssh_key", "pem": string(rsaPEMBytes)}); r["ok"] != true {
+		t.Fatalf("add_ssh_key (rsa classic PEM) failed: %+v", r)
+	}
+
 	// 3. Connect Browser WASM Workstation over WebSocket (/ws/workstation)
 	wsURL := "ws://" + strings.TrimPrefix(httpSrv.URL, "http://") + "/ws/workstation"
 	wsConn, err := websocket.Dial(wsURL, "", httpSrv.URL)
@@ -543,8 +562,8 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIdentities: %v", err)
 	}
-	if len(idResp.GetKeys()) != 1 || idResp.GetKeys()[0].GetComment() != "browser@chrome" {
-		t.Fatalf("expected 1 browser@chrome key from WASM workstation, got %+v", idResp.GetKeys())
+	if len(idResp.GetKeys()) != 3 || idResp.GetKeys()[0].GetComment() != "browser@chrome" || idResp.GetKeys()[1].GetKeyType() != "ssh-rsa" {
+		t.Fatalf("expected 3 keys (ed25519 + 2 rsa) from WASM workstation, got %+v", idResp.GetKeys())
 	}
 
 	signReq := &sockcastv1.SignRequest{
