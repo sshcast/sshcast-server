@@ -480,9 +480,15 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	if out, err := exec.Command("ssh-keygen", "-q", "-t", "rsa", "-b", "2048", "-m", "PEM", "-N", "", "-f", rsaPEMPath).CombinedOutput(); err != nil {
 		t.Fatalf("ssh-keygen rsa pem failed: %v: %s", err, string(out))
 	}
+	if out, err := exec.Command("openssl", "rsa", "-in", rsaPEMPath, "-out", rsaPEMPath, "-traditional", "-des3", "-passout", "pass:des3-secret").CombinedOutput(); err != nil {
+		t.Fatalf("openssl rsa -des3 failed: %v: %s", err, string(out))
+	}
 	rsaPEMBytes, _ := os.ReadFile(rsaPEMPath)
-	if r := callWasm(map[string]any{"op": "add_ssh_key", "pem": string(rsaPEMBytes)}); r["ok"] != true {
-		t.Fatalf("add_ssh_key (rsa classic PEM) failed: %+v", r)
+	if r := callWasm(map[string]any{"op": "add_ssh_key", "pem": string(rsaPEMBytes)}); r["ok"] == true || r["needs_passphrase"] != true {
+		t.Fatalf("expected needs_passphrase for DES-EDE3-CBC RSA PEM, got: %+v", r)
+	}
+	if r := callWasm(map[string]any{"op": "add_ssh_key", "pem": string(rsaPEMBytes), "passphrase": "des3-secret"}); r["ok"] != true {
+		t.Fatalf("add_ssh_key (rsa classic DES-EDE3-CBC PEM) failed: %+v", r)
 	}
 
 	// 3. Connect Browser WASM Workstation over WebSocket (/ws/workstation)

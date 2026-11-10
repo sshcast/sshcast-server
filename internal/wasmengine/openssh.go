@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/des"
 	"crypto/ed25519"
 	"crypto/md5"
 	"crypto/rsa"
@@ -376,6 +377,10 @@ func decryptLegacyPEMBlock(block *pem.Block, passphrase string) ([]byte, error) 
 	}
 	var keyLen int
 	switch alg {
+	case "DES-CBC":
+		keyLen = 8
+	case "DES-EDE3-CBC":
+		keyLen = 24
 	case "AES-128-CBC":
 		keyLen = 16
 	case "AES-192-CBC":
@@ -383,10 +388,10 @@ func decryptLegacyPEMBlock(block *pem.Block, passphrase string) ([]byte, error) 
 	case "AES-256-CBC":
 		keyLen = 32
 	default:
-		return nil, fmt.Errorf("unsupported encrypted PEM cipher %q (supported: AES-128/192/256-CBC or OPENSSH PRIVATE KEY)", alg)
+		return nil, fmt.Errorf("unsupported encrypted PEM cipher %q", alg)
 	}
-	if len(iv) != aes.BlockSize || len(block.Bytes)%aes.BlockSize != 0 {
-		return nil, errors.New("invalid AES-CBC IV or ciphertext length in encrypted PEM")
+	if len(iv) < 8 {
+		return nil, errors.New("invalid DEK-Info IV in encrypted PEM")
 	}
 
 	// OpenSSL EVP_BytesToKey with MD5 and 8-byte salt (iv[:8])
@@ -401,17 +406,27 @@ func decryptLegacyPEMBlock(block *pem.Block, passphrase string) ([]byte, error) 
 		prev = h.Sum(nil)
 		key = append(key, prev...)
 	}
-	c, err := aes.NewCipher(key[:keyLen])
+
+	var c cipher.Block
+	switch alg {
+	case "DES-CBC":
+		c, err = des.NewCipher(key[:8])
+	case "DES-EDE3-CBC":
+		c, err = des.NewTripleDESCipher(key[:24])
+	default:
+		c, err = aes.NewCipher(key[:keyLen])
+	}
 	if err != nil {
 		return nil, err
 	}
+	blockSize := c.BlockSize()
+	if len(iv) != blockSize || len(block.Bytes) == 0 || len(block.Bytes)%blockSize != 0 {
+		return nil, errors.New("invalid IV or ciphertext length in encrypted PEM")
+	}
 	out := make([]byte, len(block.Bytes))
 	cipher.NewCBCDecrypter(c, iv).CryptBlocks(out, block.Bytes)
-	if len(out) == 0 {
-		return nil, ErrInvalidPassphrase
-	}
 	padLen := int(out[len(out)-1])
-	if padLen == 0 || padLen > aes.BlockSize || padLen > len(out) {
+	if padLen == 0 || padLen > blockSize || padLen > len(out) {
 		return nil, ErrInvalidPassphrase
 	}
 	for i := len(out) - padLen; i < len(out); i++ {
