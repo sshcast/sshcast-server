@@ -3,8 +3,8 @@ Description=Sshcast Coordinator Server Unix Socket (for Nginx grpc_pass)
 Documentation=https://github.com/theraphim/sshcast-server
 
 [Socket]
-ListenStream=/run/sshcast/server.sock
-RuntimeDirectory=sshcast
+ListenStream=/run/sshcast-server/server.sock
+RuntimeDirectory=sshcast-server
 SocketMode=0666
 Accept=no
 

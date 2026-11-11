@@ -45,7 +45,7 @@ func TestKongTOMLAndCLIFlagOverrides(t *testing.T) {
 	opHex := strings.Repeat("cd", 32)
 
 	tomlContent := `
-listen_addr = "unix:/run/sshcast/server.sock"
+listen_addr = "unix:/run/sshcast-server/server.sock"
 sign_ack_timeout_ms = 2500
 allowed_user_pubkeys = ["sc_pub_` + pubHex + `"]
 trusted_operator_pubkeys = ["sc_op_pub_` + opHex + `"]

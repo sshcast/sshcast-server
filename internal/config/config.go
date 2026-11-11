@@ -17,7 +17,7 @@ import (
 )
 
 type Config struct {
-	ListenAddr             string   `toml:"listen_addr" name:"listen_addr" aliases:"listen,listen-addr" default:"127.0.0.1:8080" help:"Listen address override when not socket-activated (e.g. unix:/run/sshcast/server.sock or 127.0.0.1:8080)."`
+	ListenAddr             string   `toml:"listen_addr" name:"listen_addr" aliases:"listen,listen-addr" default:"127.0.0.1:8080" help:"Listen address override when not socket-activated (e.g. unix:/run/sshcast-server/server.sock or 127.0.0.1:8080)."`
 	TLSCertFile            string   `toml:"tls_cert_file" name:"tls_cert_file" aliases:"tls-cert,tls-cert-file" help:"Optional TLS certificate file (leave empty for h2c behind Nginx/Cloudflare)."`
 	TLSKeyFile             string   `toml:"tls_key_file" name:"tls_key_file" aliases:"tls-key,tls-key-file" help:"Optional TLS private key file."`
 	AllowAnyUser           bool     `toml:"allow_any_user" name:"allow_any_user" aliases:"allow-any-user" default:"false" help:"Allow any valid Ed25519 user root key without allowlist check."`

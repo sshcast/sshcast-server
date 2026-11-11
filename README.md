@@ -4,7 +4,7 @@ Stateless, zero-database, active-active gRPC Coordinator Server for the **Sshcas
 
 ## Key Features
 - **`systemd` Multi-Socket Activation (`LISTEN_FDS`):**
-  - Ships with `sshcast-server.socket` listening on `/run/sshcast/server.sock` by default — zero TCP ports opened out of the box and zero port collision risk.
+  - Ships with `sshcast-server.socket` listening on `/run/sshcast-server/server.sock` by default — zero TCP ports opened out of the box and zero port collision risk.
   - Also ships with template unit `sshcast-server-tcp@.socket` (`ListenStream=127.0.0.1:%i` with `Service=sshcast-server.service`), allowing any local TCP port to be socket-activated on demand for Cloudflare Tunnel (`cloudflared`) via `systemctl enable --now sshcast-server-tcp@8123.socket`.
   - Loops over all file descriptors passed via `LISTEN_FDS` (`fd = 3 .. 3+N-1`), serving HTTP/2 (`h2c` or TLS) across Unix sockets and TCP sockets simultaneously.
 - **Multi-User Partitioned (`internal/hub`):** Partitioned in memory by `user_id` (`sc_u_<hex>`), with per-user public key caching so `GetIdentities` succeeds instantaneously even when all workstations are offline.
@@ -30,7 +30,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/sshcast.example.com/privkey.pem;
 
     location /sshcast.v1.SshcastService/ {
-        grpc_pass grpc://unix:/run/sshcast/server.sock;
+        grpc_pass grpc://unix:/run/sshcast-server/server.sock;
         grpc_read_timeout 300s;
         grpc_send_timeout 300s;
         grpc_set_header Host $host;

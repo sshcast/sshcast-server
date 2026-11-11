@@ -1,9 +1,9 @@
 # Sshcast Coordinator Server Configuration (/etc/sshcast/server.toml)
 
 # Fallback listen address when NOT using systemd socket activation (LISTEN_FDS).
-# Under systemd, enable sshcast-server.socket (/run/sshcast/server.sock for Nginx)
+# Under systemd, enable sshcast-server.socket (/run/sshcast-server/server.sock for Nginx)
 # and/or sshcast-server-tcp@<port>.socket (127.0.0.1:<port> for Cloudflare Tunnel).
-listen_addr = "unix:/run/sshcast/server.sock"
+listen_addr = "unix:/run/sshcast-server/server.sock"
 
 # Optional TLS certificate & key (leave empty for h2c cleartext HTTP/2 behind Nginx/Cloudflare)
 tls_cert_file = ""
