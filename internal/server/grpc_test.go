@@ -385,7 +385,8 @@ func TestBrowserWasmWebSocketWorkstationAndWebHandler(t *testing.T) {
 	// Start HTTP server with /ws/workstation and /web/
 	mux := http.NewServeMux()
 	mux.Handle("/ws/workstation", srv.WorkstationWebSocketHandler())
-	mux.Handle("/web/", web.Handler(""))
+	mux.HandleFunc("GET /web/coordinators", web.HandleCoordinators)
+	mux.HandleFunc("GET /web/", web.HandleAssets(""))
 	httpSrv := httptest.NewServer(mux)
 	defer httpSrv.Close()
 

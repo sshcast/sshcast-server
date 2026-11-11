@@ -82,21 +82,15 @@ func main() {
 	sshcastv1.RegisterSshcastServiceServer(grpcServer, sshcastSrv)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintln(w, "ok")
 	})
 	mux.Handle("/ws/workstation", sshcastSrv.WorkstationWebSocketHandler())
-	webHandler := web.Handler(cfg.WebDir)
-	mux.Handle("/web", webHandler)
-	mux.Handle("/web/", webHandler)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.Redirect(w, r, "/web/", http.StatusFound)
-			return
-		}
-		http.NotFound(w, r)
+	mux.HandleFunc("GET /web/coordinators", web.HandleCoordinators)
+	mux.HandleFunc("GET /web/", web.HandleAssets(cfg.WebDir))
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/web/", http.StatusFound)
 	})
 
 	mixedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
