@@ -8,6 +8,8 @@ import (
 
 	sshcastv1 "stingr.net/go/sshcast-proto/gen/go/sshcast/v1"
 	"golang.org/x/net/websocket"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -55,6 +57,9 @@ func (s *SshcastServer) WorkstationWebSocketHandler() http.Handler {
 		},
 		Handler: func(conn *websocket.Conn) {
 			conn.PayloadType = websocket.BinaryFrame
+			if s.cfg != nil && s.cfg.MaxGRPCMessageBytes > 0 {
+				conn.MaxPayloadBytes = s.cfg.MaxGRPCMessageBytes
+			}
 			defer func() {
 				_ = conn.Close()
 			}()
@@ -63,7 +68,11 @@ func (s *SshcastServer) WorkstationWebSocketHandler() http.Handler {
 				conn: conn,
 			}
 			if err := s.serveWorkstationStream(stream, "ws"); err != nil {
-				log.Printf("[ws] Workstation stream ended with error: %v", err)
+				if st, ok := status.FromError(err); ok && st.Code() == codes.ResourceExhausted {
+					log.Printf("[ws] Workstation connection rejected (%v): %s", st.Code(), st.Message())
+				} else {
+					log.Printf("[ws] Workstation stream ended with error: %v", err)
+				}
 			}
 		},
 	}

@@ -66,10 +66,15 @@ func main() {
 		log.Printf("[warn] Neither allow_any_user, trusted_operator_pubkeys, nor allowed_user_pubkeys is configured; all requests will be denied until configured.")
 	}
 
-	registry := hub.NewRegistry(cfg.SignAckTimeout(), cfg.SignResponseTimeout())
+	registry := hub.NewRegistryWithLimits(cfg.SignAckTimeout(), cfg.SignResponseTimeout(), hub.Limits{
+		MaxWorkstationsPerUser: cfg.MaxWorkstationsPerUser,
+		MaxRelaysPerUser:       cfg.MaxRelaysPerUser,
+		MaxPendingSignsPerUser: cfg.MaxPendingSignsPerUser,
+		MaxUsers:               cfg.MaxUsers,
+	})
 	sshcastSrv := server.New(cfg, registry)
 
-	grpcServer := grpc.NewServer(
+	grpcOpts := []grpc.ServerOption{
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			Time:    30 * time.Second,
 			Timeout: 10 * time.Second,
@@ -78,7 +83,14 @@ func main() {
 			MinTime:             10 * time.Second,
 			PermitWithoutStream: true,
 		}),
-	)
+	}
+	if cfg.MaxGRPCMessageBytes > 0 {
+		grpcOpts = append(grpcOpts,
+			grpc.MaxRecvMsgSize(cfg.MaxGRPCMessageBytes),
+			grpc.MaxSendMsgSize(cfg.MaxGRPCMessageBytes),
+		)
+	}
+	grpcServer := grpc.NewServer(grpcOpts...)
 	sshcastv1.RegisterSshcastServiceServer(grpcServer, sshcastSrv)
 
 	mux := http.NewServeMux()

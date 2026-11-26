@@ -18,7 +18,30 @@ var (
 	ErrNoWorkstationConnected = errors.New("no workstation connected for user")
 	ErrNoWorkstationAcked     = errors.New("no connected workstation acknowledged sign request within timeout")
 	ErrSignApprovalTimedOut   = errors.New("timed out waiting for workstation sign approval")
+	ErrTooManyUsers           = errors.New("maximum user capacity reached on coordinator")
+	ErrTooManyWorkstations    = errors.New("maximum workstations per user reached")
+	ErrTooManyRelays          = errors.New("maximum relays per user reached")
+	ErrTooManyPendingSigns    = errors.New("maximum pending sign requests per user reached")
 )
+
+// Limits configures per-coordinator and per-user resource caps.
+// Non-positive values disable the corresponding cap.
+type Limits struct {
+	MaxWorkstationsPerUser int
+	MaxRelaysPerUser       int
+	MaxPendingSignsPerUser int
+	MaxUsers               int
+}
+
+// DefaultLimits returns the default safety caps for a coordinator hub Registry.
+func DefaultLimits() Limits {
+	return Limits{
+		MaxWorkstationsPerUser: 16,
+		MaxRelaysPerUser:       64,
+		MaxPendingSignsPerUser: 16,
+		MaxUsers:               10000,
+	}
+}
 
 type WorkstationSession struct {
 	UserID           string
@@ -138,36 +161,77 @@ type Registry struct {
 	users               map[string]*UserHub
 	signAckTimeout      time.Duration
 	signResponseTimeout time.Duration
+	limits              Limits
 }
 
 func NewRegistry(signAckTimeout, signResponseTimeout time.Duration) *Registry {
+	return NewRegistryWithLimits(signAckTimeout, signResponseTimeout, DefaultLimits())
+}
+
+// NewRegistryWithLimits creates a Registry enforcing the specified safety Limits.
+func NewRegistryWithLimits(signAckTimeout, signResponseTimeout time.Duration, limits Limits) *Registry {
 	return &Registry{
 		users:               make(map[string]*UserHub),
 		signAckTimeout:      signAckTimeout,
 		signResponseTimeout: signResponseTimeout,
+		limits:              limits,
 	}
 }
 
-func (r *Registry) getOrCreateUserHub(userID string) *UserHub {
+func (r *Registry) getUserHub(userID string) *UserHub {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.users[userID]
+}
+
+func (r *Registry) evictOneInactiveUserLocked() {
+	for uid, uh := range r.users {
+		uh.mu.Lock()
+		inactive := len(uh.workstations) == 0 && len(uh.relays) == 0 && len(uh.pending) == 0
+		uh.mu.Unlock()
+		if inactive {
+			delete(r.users, uid)
+			return
+		}
+	}
+}
+
+func (r *Registry) getOrCreateAndLockUserHub(userID string) (*UserHub, error) {
+	r.mu.Lock()
 	uh, ok := r.users[userID]
 	if !ok {
+		if r.limits.MaxUsers > 0 && len(r.users) >= r.limits.MaxUsers {
+			r.evictOneInactiveUserLocked()
+			if len(r.users) >= r.limits.MaxUsers {
+				r.mu.Unlock()
+				return nil, ErrTooManyUsers
+			}
+		}
 		uh = newUserHub(userID)
 		r.users[userID] = uh
 	}
-	return uh
+	uh.mu.Lock()
+	r.mu.Unlock()
+	return uh, nil
 }
 
 // RegisterWorkstation registers a connected workstation stream for userID.
-// If an older session with the same nodeID exists, it is closed and replaced.
-func (r *Registry) RegisterWorkstation(userID, nodeID string) *WorkstationSession {
-	uh := r.getOrCreateUserHub(userID)
-	uh.mu.Lock()
+// If an older session with the same nodeID exists, it is closed and replaced without counting against MaxWorkstationsPerUser.
+func (r *Registry) RegisterWorkstation(userID, nodeID string) (*WorkstationSession, error) {
+	uh, err := r.getOrCreateAndLockUserHub(userID)
+	if err != nil {
+		return nil, err
+	}
 	defer uh.mu.Unlock()
 
 	if old, exists := uh.workstations[nodeID]; exists {
-		close(old.DoneCh)
+		select {
+		case <-old.DoneCh:
+		default:
+			close(old.DoneCh)
+		}
+	} else if r.limits.MaxWorkstationsPerUser > 0 && len(uh.workstations) >= r.limits.MaxWorkstationsPerUser {
+		return nil, ErrTooManyWorkstations
 	}
 
 	ws := &WorkstationSession{
@@ -178,12 +242,20 @@ func (r *Registry) RegisterWorkstation(userID, nodeID string) *WorkstationSessio
 		DoneCh:      make(chan struct{}),
 	}
 	uh.workstations[nodeID] = ws
-	return ws
+	return ws, nil
 }
 
 // UnregisterWorkstation removes the workstation session if it matches the given pointer.
 func (r *Registry) UnregisterWorkstation(ws *WorkstationSession) {
-	uh := r.getOrCreateUserHub(ws.UserID)
+	if ws == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	uh, ok := r.users[ws.UserID]
+	if !ok {
+		return
+	}
 	uh.mu.Lock()
 	defer uh.mu.Unlock()
 
@@ -197,6 +269,9 @@ func (r *Registry) UnregisterWorkstation(ws *WorkstationSession) {
 		}
 		if len(uh.workstations) > 0 {
 			uh.rebuildCachedKeysLocked()
+		}
+		if len(uh.workstations) == 0 && len(uh.relays) == 0 && len(uh.pending) == 0 && len(uh.cachedKeys) == 0 {
+			delete(r.users, ws.UserID)
 		}
 	}
 }
@@ -237,12 +312,19 @@ func (uh *UserHub) anyWorkstationHasKeyLocked(keyBlob []byte) bool {
 // If any pending SignRequests are waiting for human approval and this workstation just became newly active,
 // the SignRequest is also forwarded to this workstation.
 func (r *Registry) UpdateWorkstationStatus(ws *WorkstationSession, status *sshcastv1.WorkstationStatus) {
-	if status == nil {
+	if ws == nil || status == nil {
 		return
 	}
-	uh := r.getOrCreateUserHub(ws.UserID)
+	uh := r.getUserHub(ws.UserID)
+	if uh == nil {
+		return
+	}
 	uh.mu.Lock()
 	defer uh.mu.Unlock()
+
+	if cur, ok := uh.workstations[ws.NodeID]; !ok || cur != ws {
+		return
+	}
 
 	ws.LastInputEpochMs = status.GetLastInputEpochMs()
 	ws.ForceActive = status.GetForceActive()
@@ -289,7 +371,10 @@ func (r *Registry) UpdateWorkstationStatus(ws *WorkstationSession, status *sshca
 // GetIdentities returns the union of public keys across all connected workstations for userID
 // (ordered by workstation activity), or the last known cached keys if no workstations are connected.
 func (r *Registry) GetIdentities(userID string) []*sshcastv1.PublicKey {
-	uh := r.getOrCreateUserHub(userID)
+	uh := r.getUserHub(userID)
+	if uh == nil {
+		return nil
+	}
 	uh.mu.Lock()
 	defer uh.mu.Unlock()
 
@@ -306,7 +391,10 @@ func (r *Registry) HandleSignAck(userID, nodeID string, ack *sshcastv1.SignAck) 
 	if ack == nil {
 		return
 	}
-	uh := r.getOrCreateUserHub(userID)
+	uh := r.getUserHub(userID)
+	if uh == nil {
+		return
+	}
 	uh.mu.Lock()
 	p, ok := uh.pending[ack.GetRequestId()]
 	uh.mu.Unlock()
@@ -327,7 +415,10 @@ func (r *Registry) HandleSignResponse(userID, nodeID string, resp *sshcastv1.Sig
 	if resp.HandledByNodeId == "" {
 		resp.HandledByNodeId = nodeID
 	}
-	uh := r.getOrCreateUserHub(userID)
+	uh := r.getUserHub(userID)
+	if uh == nil {
+		return
+	}
 	uh.mu.Lock()
 	p, ok := uh.pending[resp.GetRequestId()]
 	uh.mu.Unlock()
@@ -381,13 +472,20 @@ func (uh *UserHub) sortedCandidatesForKeyLocked(keyBlob []byte) []*WorkstationSe
 // RouteSignRequest routes a SignRequest to the user's most recently active workstation that holds
 // req.KeyBlob using the two-phase 1.5s SignAck receipt + 60s SignResponse approval protocol.
 func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *sshcastv1.SignRequest) (*sshcastv1.SignResponse, error) {
-	uh := r.getOrCreateUserHub(userID)
+	uh := r.getUserHub(userID)
+	if uh == nil {
+		return nil, ErrNoWorkstationConnected
+	}
 
 	uh.mu.Lock()
 	candidates := uh.sortedCandidatesForKeyLocked(req.GetKeyBlob())
 	if len(candidates) == 0 {
 		uh.mu.Unlock()
 		return nil, ErrNoWorkstationConnected
+	}
+	if r.limits.MaxPendingSignsPerUser > 0 && len(uh.pending) >= r.limits.MaxPendingSignsPerUser {
+		uh.mu.Unlock()
+		return nil, ErrTooManyPendingSigns
 	}
 
 	p := &pendingSignRequest{
@@ -538,13 +636,22 @@ func (r *Registry) RouteSignRequest(ctx context.Context, userID string, req *ssh
 }
 
 // RegisterRelay registers a connected relay stream (Zellij service enabled) for userID.
-func (r *Registry) RegisterRelay(userID, nodeID string) *RelaySession {
-	uh := r.getOrCreateUserHub(userID)
-	uh.mu.Lock()
+// If an older session with the same nodeID exists, it is closed and replaced without counting against MaxRelaysPerUser.
+func (r *Registry) RegisterRelay(userID, nodeID string) (*RelaySession, error) {
+	uh, err := r.getOrCreateAndLockUserHub(userID)
+	if err != nil {
+		return nil, err
+	}
 	defer uh.mu.Unlock()
 
 	if old, exists := uh.relays[nodeID]; exists {
-		close(old.DoneCh)
+		select {
+		case <-old.DoneCh:
+		default:
+			close(old.DoneCh)
+		}
+	} else if r.limits.MaxRelaysPerUser > 0 && len(uh.relays) >= r.limits.MaxRelaysPerUser {
+		return nil, ErrTooManyRelays
 	}
 
 	rs := &RelaySession{
@@ -555,12 +662,20 @@ func (r *Registry) RegisterRelay(userID, nodeID string) *RelaySession {
 		DoneCh:      make(chan struct{}),
 	}
 	uh.relays[nodeID] = rs
-	return rs
+	return rs, nil
 }
 
 // UnregisterRelay removes the relay session if it matches rs and broadcasts the updated ZellijHostList.
 func (r *Registry) UnregisterRelay(rs *RelaySession) {
-	uh := r.getOrCreateUserHub(rs.UserID)
+	if rs == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	uh, ok := r.users[rs.UserID]
+	if !ok {
+		return
+	}
 	uh.mu.Lock()
 	defer uh.mu.Unlock()
 
@@ -573,6 +688,9 @@ func (r *Registry) UnregisterRelay(rs *RelaySession) {
 			close(rs.DoneCh)
 		}
 		uh.broadcastZellijHostListLocked()
+		if len(uh.workstations) == 0 && len(uh.relays) == 0 && len(uh.pending) == 0 && len(uh.cachedKeys) == 0 {
+			delete(r.users, rs.UserID)
+		}
 	}
 }
 
@@ -603,12 +721,19 @@ func (uh *UserHub) broadcastZellijHostListLocked() {
 
 // UpdateRelayZellijStatus updates the Zellij session discovery status for a connected relay and notifies workstations.
 func (r *Registry) UpdateRelayZellijStatus(rs *RelaySession, status *sshcastv1.RelayZellijStatus) {
-	if status == nil {
+	if rs == nil || status == nil {
 		return
 	}
-	uh := r.getOrCreateUserHub(rs.UserID)
+	uh := r.getUserHub(rs.UserID)
+	if uh == nil {
+		return
+	}
 	uh.mu.Lock()
 	defer uh.mu.Unlock()
+
+	if cur, ok := uh.relays[rs.NodeID]; !ok || cur != rs {
+		return
+	}
 
 	clonedSessions := make([]*sshcastv1.ZellijSessionInfo, len(status.GetSessions()))
 	copy(clonedSessions, status.GetSessions())
@@ -623,7 +748,13 @@ func (r *Registry) UpdateRelayZellijStatus(rs *RelaySession, status *sshcastv1.R
 
 // SendZellijHostsToWorkstation sends the current ZellijHostList to ws and optionally asks connected relays to refresh.
 func (r *Registry) SendZellijHostsToWorkstation(ws *WorkstationSession, askRelaysToRefresh bool) {
-	uh := r.getOrCreateUserHub(ws.UserID)
+	if ws == nil {
+		return
+	}
+	uh := r.getUserHub(ws.UserID)
+	if uh == nil {
+		return
+	}
 	uh.mu.Lock()
 	defer uh.mu.Unlock()
 
@@ -680,7 +811,10 @@ func (r *Registry) RouteZellijFrameFromClient(userID, clientNodeID string, frame
 	if frame == nil {
 		return
 	}
-	uh := r.getOrCreateUserHub(userID)
+	uh := r.getUserHub(userID)
+	if uh == nil {
+		return
+	}
 	uh.mu.Lock()
 	frame.ClientNodeId = clientNodeID
 	rs := uh.findRelayLocked(frame.GetRelayNodeId())
@@ -717,7 +851,10 @@ func (r *Registry) RouteZellijFrameFromRelay(userID, relayNodeID string, frame *
 	if frame == nil {
 		return
 	}
-	uh := r.getOrCreateUserHub(userID)
+	uh := r.getUserHub(userID)
+	if uh == nil {
+		return
+	}
 	uh.mu.Lock()
 	frame.RelayNodeId = relayNodeID
 	ws, ok := uh.workstations[frame.GetClientNodeId()]

@@ -26,15 +26,16 @@ func init() {
 // HandleCoordinators resolves _sshcast.<domain> DNS TXT coordinator records for the Browser Workstation UI.
 func HandleCoordinators(w http.ResponseWriter, r *http.Request) {
 	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
-	var servers []string
+	var disc dns.SwarmDiscovery
 	if domain != "" {
-		servers = dns.ResolveCoordinatorServers(r.Context(), []string{domain})
+		disc = dns.ResolveSwarmDiscovery(r.Context(), []string{domain})
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":      true,
-		"domain":  domain,
-		"servers": servers,
+		"ok":           true,
+		"domain":       domain,
+		"servers":      disc.Servers,
+		"operator_url": disc.OperatorURL,
 	})
 }
 

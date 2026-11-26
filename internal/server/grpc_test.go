@@ -20,7 +20,9 @@ import (
 	"stingr.net/go/sshcast-server/internal/web"
 	"golang.org/x/net/websocket"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -606,5 +608,284 @@ func TestOperatorSignedUserCertAuthorization(t *testing.T) {
 	}
 	if _, err := client.GetIdentities(ctx, &sshcastv1.GetIdentitiesRequest{Auth: certAuth}); err != nil {
 		t.Fatalf("expected operator-certified user to be authorized, got: %v", err)
+	}
+}
+
+func TestCoordinatorSafetyLimitsGRPCAndWS(t *testing.T) {
+	_, userPriv := keypair(0xa1)
+	ws1Pub, ws1Priv := keypair(0xa2)
+	ws2Pub, ws2Priv := keypair(0xa3)
+	ws3Pub, ws3Priv := keypair(0xa4)
+	r1Pub, r1Priv := keypair(0xa5)
+	r2Pub, r2Priv := keypair(0xa6)
+	r3Pub, r3Priv := keypair(0xa7)
+	_, otherUserPriv := keypair(0xa8)
+	otherWsPub, otherWsPriv := keypair(0xa9)
+
+	cfg := config.Default()
+	cfg.AllowAnyUser = true
+	cfg.SignAckTimeoutMs = 500
+	cfg.SignResponseTimeoutMs = 3000
+
+	reg := hub.NewRegistryWithLimits(cfg.SignAckTimeout(), cfg.SignResponseTimeout(), hub.Limits{
+		MaxWorkstationsPerUser: 2,
+		MaxRelaysPerUser:       2,
+		MaxPendingSignsPerUser: 1,
+		MaxUsers:               1,
+	})
+	srv := New(cfg, reg)
+
+	grpcLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen gRPC: %v", err)
+	}
+	grpcServer := grpc.NewServer(
+		grpc.MaxRecvMsgSize(cfg.MaxGRPCMessageBytes),
+		grpc.MaxSendMsgSize(cfg.MaxGRPCMessageBytes),
+	)
+	sshcastv1.RegisterSshcastServiceServer(grpcServer, srv)
+	go func() { _ = grpcServer.Serve(grpcLis) }()
+	defer grpcServer.Stop()
+
+	mux := http.NewServeMux()
+	mux.Handle("/ws/workstation", srv.WorkstationWebSocketHandler())
+	httpSrv := httptest.NewServer(mux)
+	defer httpSrv.Close()
+
+	conn, err := grpc.NewClient(grpcLis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	defer conn.Close()
+	client := sshcastv1.NewSshcastServiceClient(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 1. Connect 2 workstations (1 gRPC + 1 WebSocket).
+	_, ws1Auth := makeSignedGrantAndAuth(t, userPriv, ws1Pub, ws1Priv, "ws-1", sshcastv1.NodeRole_NODE_ROLE_CLIENT)
+	ws1Stream, err := client.ConnectWorkstation(ctx)
+	if err != nil {
+		t.Fatalf("ConnectWorkstation ws-1: %v", err)
+	}
+	if err := ws1Stream.Send(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: ws1Auth},
+	}); err != nil {
+		t.Fatalf("ws1 Send handshake: %v", err)
+	}
+	if _, err := ws1Stream.Recv(); err != nil {
+		t.Fatalf("ws1 Recv heartbeat: %v", err)
+	}
+
+	wsURL := "ws://" + strings.TrimPrefix(httpSrv.URL, "http://") + "/ws/workstation"
+	_, ws2Auth := makeSignedGrantAndAuth(t, userPriv, ws2Pub, ws2Priv, "ws-2", sshcastv1.NodeRole_NODE_ROLE_CLIENT)
+	ws2Conn, err := websocket.Dial(wsURL, "", httpSrv.URL)
+	if err != nil {
+		t.Fatalf("websocket.Dial ws-2: %v", err)
+	}
+	defer ws2Conn.Close()
+	rawWs2Auth, err := proto.Marshal(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: ws2Auth},
+	})
+	if err != nil {
+		t.Fatalf("Marshal ws2Auth: %v", err)
+	}
+	if err := websocket.Message.Send(ws2Conn, rawWs2Auth); err != nil {
+		t.Fatalf("Send ws2Auth: %v", err)
+	}
+	var hbRaw []byte
+	if err := websocket.Message.Receive(ws2Conn, &hbRaw); err != nil {
+		t.Fatalf("Receive ws2 heartbeat: %v", err)
+	}
+
+	// 2. 3rd workstation over gRPC fails with ResourceExhausted.
+	_, ws3Auth := makeSignedGrantAndAuth(t, userPriv, ws3Pub, ws3Priv, "ws-3", sshcastv1.NodeRole_NODE_ROLE_CLIENT)
+	ws3Stream, err := client.ConnectWorkstation(ctx)
+	if err != nil {
+		t.Fatalf("ConnectWorkstation ws-3 dial: %v", err)
+	}
+	if err := ws3Stream.Send(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: ws3Auth},
+	}); err != nil {
+		t.Fatalf("ws3 Send handshake: %v", err)
+	}
+	if _, err := ws3Stream.Recv(); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted for 3rd workstation over gRPC, got %v", err)
+	}
+
+	// 3. 3rd workstation over WebSocket is closed cleanly without receiving heartbeat.
+	ws3Conn, err := websocket.Dial(wsURL, "", httpSrv.URL)
+	if err != nil {
+		t.Fatalf("websocket.Dial ws-3: %v", err)
+	}
+	defer ws3Conn.Close()
+	rawWs3Auth, err := proto.Marshal(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: ws3Auth},
+	})
+	if err != nil {
+		t.Fatalf("Marshal ws3Auth: %v", err)
+	}
+	if err := websocket.Message.Send(ws3Conn, rawWs3Auth); err != nil {
+		t.Fatalf("Send ws3Auth: %v", err)
+	}
+	var rejectedRaw []byte
+	if err := websocket.Message.Receive(ws3Conn, &rejectedRaw); err == nil {
+		t.Fatalf("expected 3rd workstation WebSocket to close cleanly on ResourceExhausted, got %d bytes", len(rejectedRaw))
+	}
+
+	// 4. Reconnecting with same nodeID "ws-1" succeeds even at MaxWorkstationsPerUser=2.
+	ws1ReconnectStream, err := client.ConnectWorkstation(ctx)
+	if err != nil {
+		t.Fatalf("ConnectWorkstation ws-1 reconnect: %v", err)
+	}
+	if err := ws1ReconnectStream.Send(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: ws1Auth},
+	}); err != nil {
+		t.Fatalf("ws1Reconnect Send handshake: %v", err)
+	}
+	if _, err := ws1ReconnectStream.Recv(); err != nil {
+		t.Fatalf("expected same-nodeID reconnect to succeed, got %v", err)
+	}
+
+	// 5. Connect 2 relays; 3rd relay fails with ResourceExhausted.
+	connectRelay := func(nodeID string, pub ed25519.PublicKey, priv ed25519.PrivateKey) (sshcastv1.SshcastService_ConnectRelayClient, *sshcastv1.NodeGrant, *sshcastv1.NodeAuth, error) {
+		grant, authMsg := makeSignedGrantAndAuth(t, userPriv, pub, priv, nodeID, sshcastv1.NodeRole_NODE_ROLE_RELAY)
+		rs, err := client.ConnectRelay(ctx)
+		if err != nil {
+			return nil, grant, authMsg, err
+		}
+		if err := rs.Send(&sshcastv1.RelayStreamMessage{
+			Payload: &sshcastv1.RelayStreamMessage_AuthHandshake{AuthHandshake: authMsg},
+		}); err != nil {
+			return nil, grant, authMsg, err
+		}
+		_, err = rs.Recv()
+		return rs, grant, authMsg, err
+	}
+
+	r1Stream, r1Grant, r1Auth, err := connectRelay("relay-1", r1Pub, r1Priv)
+	if err != nil {
+		t.Fatalf("connectRelay relay-1: %v", err)
+	}
+	defer func() { _ = r1Stream.CloseSend() }()
+	r2Stream, _, _, err := connectRelay("relay-2", r2Pub, r2Priv)
+	if err != nil {
+		t.Fatalf("connectRelay relay-2: %v", err)
+	}
+	defer func() { _ = r2Stream.CloseSend() }()
+	if _, _, _, err := connectRelay("relay-3", r3Pub, r3Priv); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted for 3rd relay, got %v", err)
+	}
+
+	// 6. MaxUsers=1 rejects a second user over gRPC with ResourceExhausted.
+	_, otherAuth := makeSignedGrantAndAuth(t, otherUserPriv, otherWsPub, otherWsPriv, "other-ws", sshcastv1.NodeRole_NODE_ROLE_CLIENT)
+	otherStream, err := client.ConnectWorkstation(ctx)
+	if err != nil {
+		t.Fatalf("ConnectWorkstation other user: %v", err)
+	}
+	if err := otherStream.Send(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_AuthHandshake{AuthHandshake: otherAuth},
+	}); err != nil {
+		t.Fatalf("otherStream Send handshake: %v", err)
+	}
+	if _, err := otherStream.Recv(); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted for MaxUsers exceeded, got %v", err)
+	}
+
+	// 7. Pending SignRequest cap (MaxPendingSignsPerUser = 1):
+	// Push status on ws1Reconnect so it handles SignRequest.
+	testKey := []byte("ssh-ed25519-limit-test-key")
+	if err := ws1ReconnectStream.Send(&sshcastv1.ClientStreamMessage{
+		Payload: &sshcastv1.ClientStreamMessage_Status{
+			Status: &sshcastv1.WorkstationStatus{
+				LastInputEpochMs: uint64(time.Now().UnixMilli()),
+				ForceActive:      true,
+				Keys: []*sshcastv1.PublicKey{
+					{KeyBlob: testKey, KeyType: "ssh-ed25519", Comment: "limit@ws1"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("ws1Reconnect Send status: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	ackedFirst := make(chan string, 1)
+	releaseFirst := make(chan struct{})
+	go func() {
+		for {
+			msg, err := ws1ReconnectStream.Recv()
+			if err != nil {
+				return
+			}
+			if sr := msg.GetSignRequest(); sr != nil {
+				_ = ws1ReconnectStream.Send(&sshcastv1.ClientStreamMessage{
+					Payload: &sshcastv1.ClientStreamMessage_SignAck{
+						SignAck: &sshcastv1.SignAck{RequestId: sr.GetRequestId()},
+					},
+				})
+				ackedFirst <- sr.GetRequestId()
+				<-releaseFirst
+				_ = ws1ReconnectStream.Send(&sshcastv1.ClientStreamMessage{
+					Payload: &sshcastv1.ClientStreamMessage_SignResponse{
+						SignResponse: &sshcastv1.SignResponse{
+							RequestId:       sr.GetRequestId(),
+							Approved:        true,
+							SignatureBlob:   []byte("sig-ok"),
+							HandledByNodeId: "ws-1",
+						},
+					},
+				})
+				return
+			}
+		}
+	}()
+
+	makeSignReq := func(reqID string) *sshcastv1.SignRequest {
+		req := &sshcastv1.SignRequest{
+			RequestId:       reqID,
+			TimestampUnixMs: uint64(time.Now().UnixMilli()),
+			KeyBlob:         testKey,
+			Data:            []byte("challenge-" + reqID),
+			ProcessContext:  &sshcastv1.ProcessContext{Hostname: "relay-1", Uid: 1000, Pid: 1, Comm: "ssh"},
+			RelayGrant:      r1Grant,
+			Auth:            r1Auth,
+		}
+		if err := auth.SignSignRequest(req, r1Priv); err != nil {
+			t.Fatalf("SignSignRequest %s: %v", reqID, err)
+		}
+		return req
+	}
+
+	firstRespCh := make(chan *sshcastv1.SignResponse, 1)
+	firstErrCh := make(chan error, 1)
+	go func() {
+		resp, err := client.Sign(ctx, makeSignReq("req-cap-1"))
+		firstRespCh <- resp
+		firstErrCh <- err
+	}()
+
+	select {
+	case <-ackedFirst:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first SignRequest SignAck")
+	}
+
+	// Second concurrent Sign RPC exceeds MaxPendingSignsPerUser=1.
+	secondResp, secondErr := client.Sign(ctx, makeSignReq("req-cap-2"))
+	if secondErr != nil {
+		if status.Code(secondErr) != codes.ResourceExhausted {
+			t.Fatalf("expected either SignResponse{Approved: false} or ResourceExhausted, got err=%v", secondErr)
+		}
+	} else if secondResp.GetApproved() || !strings.Contains(secondResp.GetErrorMessage(), hub.ErrTooManyPendingSigns.Error()) {
+		t.Fatalf("expected unapproved SignResponse mentioning ErrTooManyPendingSigns, got %+v", secondResp)
+	}
+
+	close(releaseFirst)
+	if err := <-firstErrCh; err != nil {
+		t.Fatalf("first Sign RPC error: %v", err)
+	}
+	if resp := <-firstRespCh; !resp.GetApproved() {
+		t.Fatalf("expected first Sign RPC to be approved, got %+v", resp)
 	}
 }

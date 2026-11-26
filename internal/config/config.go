@@ -28,6 +28,11 @@ type Config struct {
 	HeartbeatIntervalMs    uint64   `toml:"heartbeat_interval_ms" name:"heartbeat_interval_ms" aliases:"heartbeat-interval-ms" default:"25000" help:"Stream heartbeat interval in milliseconds."`
 	MaxClockSkewMs         uint64   `toml:"max_clock_skew_ms" name:"max_clock_skew_ms" aliases:"max-clock-skew-ms" default:"300000" help:"Maximum allowed clock skew in milliseconds."`
 	WebDir                 string   `toml:"web_dir" name:"web_dir" aliases:"web-dir" help:"Optional custom directory for /web/ static assets (e.g. custom sshcast_proto.wasm)."`
+	MaxWorkstationsPerUser int      `toml:"max_workstations_per_user" name:"max_workstations_per_user" aliases:"max-workstations-per-user" default:"16" help:"Maximum concurrent workstation connections per user (0 disables cap)."`
+	MaxRelaysPerUser       int      `toml:"max_relays_per_user" name:"max_relays_per_user" aliases:"max-relays-per-user" default:"64" help:"Maximum concurrent relay connections per user (0 disables cap)."`
+	MaxPendingSignsPerUser int      `toml:"max_pending_signs_per_user" name:"max_pending_signs_per_user" aliases:"max-pending-signs-per-user" default:"16" help:"Maximum concurrent pending sign requests per user (0 disables cap)."`
+	MaxUsers               int      `toml:"max_users" name:"max_users" aliases:"max-users" default:"10000" help:"Maximum distinct active users in coordinator registry (0 disables cap)."`
+	MaxGRPCMessageBytes    int      `toml:"max_grpc_message_bytes" name:"max_grpc_message_bytes" aliases:"max-grpc-message-bytes" default:"4194304" help:"Maximum gRPC send and receive message size in bytes."`
 
 	parsedAllowedKeys  [][]byte `toml:"-" kong:"-"`
 	parsedOperatorKeys [][]byte `toml:"-" kong:"-"`
@@ -35,12 +40,17 @@ type Config struct {
 
 func Default() *Config {
 	return &Config{
-		ListenAddr:            "127.0.0.1:8080",
-		AllowAnyUser:          false,
-		SignAckTimeoutMs:      1500,
-		SignResponseTimeoutMs: 60000,
-		HeartbeatIntervalMs:   25000,
-		MaxClockSkewMs:        5 * 60 * 1000,
+		ListenAddr:             "127.0.0.1:8080",
+		AllowAnyUser:           false,
+		SignAckTimeoutMs:       1500,
+		SignResponseTimeoutMs:  60000,
+		HeartbeatIntervalMs:    25000,
+		MaxClockSkewMs:         5 * 60 * 1000,
+		MaxWorkstationsPerUser: 16,
+		MaxRelaysPerUser:       64,
+		MaxPendingSignsPerUser: 16,
+		MaxUsers:               10000,
+		MaxGRPCMessageBytes:    4194304,
 	}
 }
 

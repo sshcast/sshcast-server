@@ -8,6 +8,7 @@ import (
 
 	"github.com/alecthomas/kong"
 	kongtoml "github.com/alecthomas/kong-toml"
+	"stingr.net/go/sshcast-server/internal/config"
 )
 
 func TestAcquireStandaloneListenerUnixAndTCP(t *testing.T) {
@@ -83,5 +84,17 @@ trusted_operator_pubkeys = ["sc_op_pub_` + opHex + `"]
 	if len(parsed.AllowedUserPubkeys) != 1 || len(parsed.TrustedOperatorPubkeys) != 1 {
 		t.Fatalf("expected 1 allowed user pubkey and 1 trusted operator pubkey from TOML, got %v / %v",
 			parsed.AllowedUserPubkeys, parsed.TrustedOperatorPubkeys)
+	}
+	if parsed.MaxWorkstationsPerUser != 16 || parsed.MaxRelaysPerUser != 64 ||
+		parsed.MaxPendingSignsPerUser != 16 || parsed.MaxUsers != 10000 ||
+		parsed.MaxGRPCMessageBytes != 4194304 {
+		t.Fatalf("unexpected default coordinator safety caps via Kong: %+v", parsed.Config)
+	}
+
+	defCfg := config.Default()
+	if defCfg.MaxWorkstationsPerUser != 16 || defCfg.MaxRelaysPerUser != 64 ||
+		defCfg.MaxPendingSignsPerUser != 16 || defCfg.MaxUsers != 10000 ||
+		defCfg.MaxGRPCMessageBytes != 4194304 {
+		t.Fatalf("unexpected config.Default() safety caps: %+v", defCfg)
 	}
 }

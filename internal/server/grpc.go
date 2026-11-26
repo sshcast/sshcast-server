@@ -115,7 +115,10 @@ func (s *SshcastServer) serveWorkstationStream(stream workstationStream, transpo
 		return err
 	}
 
-	ws := s.registry.RegisterWorkstation(userID, nodeID)
+	ws, err := s.registry.RegisterWorkstation(userID, nodeID)
+	if err != nil {
+		return status.Errorf(codes.ResourceExhausted, "cannot register workstation: %v", err)
+	}
 	defer func() {
 		s.registry.UnregisterWorkstation(ws)
 		log.Printf("[%s] Workstation disconnected: node=%s user=%s", transportLabel, nodeID, userID)
@@ -214,7 +217,10 @@ func (s *SshcastServer) ConnectRelay(stream grpc.BidiStreamingServer[sshcastv1.R
 		return err
 	}
 
-	rs := s.registry.RegisterRelay(userID, nodeID)
+	rs, err := s.registry.RegisterRelay(userID, nodeID)
+	if err != nil {
+		return status.Errorf(codes.ResourceExhausted, "cannot register relay: %v", err)
+	}
 	defer func() {
 		s.registry.UnregisterRelay(rs)
 		log.Printf("[grpc] Relay Zellij stream disconnected: node=%s user=%s", nodeID, userID)

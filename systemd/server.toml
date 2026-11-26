@@ -31,3 +31,15 @@ sign_response_timeout_ms = 60000
 
 # Interval for server-to-workstation heartbeat frames to keep Cloudflare/Nginx streams alive (default: 25000ms)
 heartbeat_interval_ms = 25000
+
+# Coordinator safety caps (0 disables a cap; defaults shown below)
+# Maximum concurrent workstation connections per user (default: 16)
+# max_workstations_per_user = 16
+# Maximum concurrent relay connections per user (default: 64)
+# max_relays_per_user = 64
+# Maximum concurrent pending sign requests per user (default: 16)
+# max_pending_signs_per_user = 16
+# Maximum distinct active users in the coordinator registry (default: 10000)
+# max_users = 10000
+# Maximum gRPC send/receive message size in bytes (default: 4194304)
+# max_grpc_message_bytes = 4194304
