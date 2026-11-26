@@ -1,6 +1,6 @@
 [Unit]
 Description=Sshcast Coordinator Server (Roaming SSH Agent Router)
-Documentation=https://github.com/theraphim/sshcast-server
+Documentation=https://github.com/sshcast/sshcast-server
 After=network-online.target sshcast-server.socket
 Wants=network-online.target sshcast-server.socket
 

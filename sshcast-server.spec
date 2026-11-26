@@ -5,7 +5,7 @@ Version:        0.1.0
 Release:        1%{?dist}
 Summary:        Stateless Active-Active Coordinator Server for Sshcast Roaming SSH Agent
 License:        MIT OR Apache-2.0
-URL:            https://github.com/theraphim/sshcast-server
+URL:            https://github.com/sshcast/sshcast-server
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  golang
@@ -44,6 +44,7 @@ install -D -m 0644 systemd/server.toml %{buildroot}%{_sysconfdir}/sshcast/server
 %systemd_postun_with_restart sshcast-server.socket sshcast-server.service
 
 %files
+%license LICENSE-MIT LICENSE-APACHE
 %doc README.md
 %{_bindir}/sshcast-server
 %{_unitdir}/sshcast-server.service

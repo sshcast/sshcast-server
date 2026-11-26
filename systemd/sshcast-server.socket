@@ -1,6 +1,6 @@
 [Unit]
 Description=Sshcast Coordinator Server Unix Socket (for Nginx grpc_pass)
-Documentation=https://github.com/theraphim/sshcast-server
+Documentation=https://github.com/sshcast/sshcast-server
 
 [Socket]
 ListenStream=/run/sshcast-server/server.sock
