@@ -19,6 +19,8 @@
   let policyCleanupTimer = null;
   let lastInputEpochMs = Date.now();
   let currentBundleInfo = null;
+  let discoveredOperatorUrl = "";
+  let certRenewInFlight = false;
   let heldKeys = [];
   let pendingQueue = []; // array of SignRequestInfo
   let activePromptReq = null;
@@ -162,6 +164,82 @@
     } catch (_) {}
   }
 
+  function certNeedsRenewal(info) {
+    if (!info || !info.has_user_cert) return false;
+    if (info.user_cert_expired) return true;
+    const exp = Number(info.cert_expires_at_unix_sec || 0);
+    if (!exp) return false;
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (nowSec >= exp) return true;
+    const iss = Number(info.cert_issued_at_unix_sec || 0);
+    const total = Math.max(0, exp - iss);
+    const half = Math.floor(total / 2);
+    const threshold = total >= 7200 ? Math.max(half, 3600) : half;
+    return (exp - nowSec) <= threshold;
+  }
+
+  async function maybeRenewUserCert(force) {
+    if (!wasmEngine || !currentBundleInfo || !discoveredOperatorUrl || certRenewInFlight) {
+      return false;
+    }
+    if (!force && !certNeedsRenewal(currentBundleInfo)) {
+      return false;
+    }
+    certRenewInFlight = true;
+    try {
+      const authRes = wasmEngine.call({
+        op: "build_renew_node_auth",
+        now_unix_ms: Date.now(),
+      });
+      if (!authRes.ok || !authRes.node_auth_proto_b64) {
+        logEvent("warn", `Could not build cert renewal auth: ${authRes.error || "unknown"}`);
+        return false;
+      }
+      const url = `${discoveredOperatorUrl.replace(/\/+$/, "")}/api/v1/renew`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ node_auth_proto_b64: authRes.node_auth_proto_b64 }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.ok || !data.cert_token) {
+        logEvent("warn", `Operator cert renewal rejected (${resp.status}): ${data.error || "unknown"}`);
+        return false;
+      }
+      const nowSec = Math.floor(Date.now() / 1000);
+      const upd = wasmEngine.call({
+        op: "update_user_cert",
+        cert_token: data.cert_token,
+        now_unix_sec: nowSec,
+      });
+      if (!upd.ok) {
+        logEvent("error", `Renewed cert rejected by WASM verifier: ${upd.error}`);
+        return false;
+      }
+      currentBundleInfo.has_user_cert = true;
+      currentBundleInfo.user_cert_expired = false;
+      currentBundleInfo.cert_issued_at_unix_sec = upd.cert_issued_at_unix_sec;
+      currentBundleInfo.cert_expires_at_unix_sec = upd.cert_expires_at_unix_sec;
+      $("bundle-status").textContent = `Verified CLIENT grant: node="${currentBundleInfo.node_id}" user="${currentBundleInfo.user_id}" [Operator-Certified]`;
+      $("bundle-status").className = "status-text text-ok";
+      if (upd.updated_bundle_str) {
+        $("bundle-input").value = upd.updated_bundle_str;
+        if ($("remember-session-chk").checked) {
+          try {
+            sessionStorage.setItem(STORAGE_BUNDLE_KEY, upd.updated_bundle_str);
+          } catch (_) {}
+        }
+      }
+      logEvent("ok", `Renewed short-lived UserCert from ${discoveredOperatorUrl}`);
+      return true;
+    } catch (err) {
+      logEvent("warn", `Cert renewal request failed: ${err.message || err}`);
+      return false;
+    } finally {
+      certRenewInFlight = false;
+    }
+  }
+
   function applyBundle(bundleStr, connectAfter) {
     if (!wasmEngine) {
       logEvent("error", "WASM engine is not ready yet.");
@@ -185,25 +263,28 @@
       return false;
     }
     currentBundleInfo = res;
-    const certNote = res.has_user_cert ? " [Operator-Certified]" : "";
+    const certNote = res.has_user_cert
+      ? res.user_cert_expired
+        ? " [Operator-Cert Expired — renewing...]"
+        : " [Operator-Certified]"
+      : "";
     $("bundle-status").textContent = `Verified CLIENT grant: node="${res.node_id}" user="${res.user_id}"${certNote}`;
-    $("bundle-status").className = "status-text text-ok";
+    $("bundle-status").className = res.user_cert_expired ? "status-text" : "status-text text-ok";
 
     const currentWsInput = $("ws-url-input").value.trim();
     const locWs = defaultWsUrlFromLocation();
     if (!currentWsInput) {
       $("ws-url-input").value = locWs || res.ws_url || "";
     }
-    if (
-      Array.isArray(res.dns_domains) &&
-      res.dns_domains.length > 0 &&
-      !res.ws_url
-    ) {
+    if (Array.isArray(res.dns_domains) && res.dns_domains.length > 0) {
       const dom = res.dns_domains[0];
       fetch(`./coordinators?domain=${encodeURIComponent(dom)}`)
         .then((r) => r.json())
-        .then((data) => {
-          if (data && Array.isArray(data.servers) && data.servers.length > 0) {
+        .then(async (data) => {
+          if (data && data.operator_url) {
+            discoveredOperatorUrl = data.operator_url;
+          }
+          if (!res.ws_url && data && Array.isArray(data.servers) && data.servers.length > 0) {
             const firstUrl = data.servers[0];
             const wsUrl = firstUrl
               .replace(/^https:\/\//i, "wss://")
@@ -216,6 +297,9 @@
             if (!$("ws-url-input").value.trim()) {
               $("ws-url-input").value = wsUrl;
             }
+          }
+          if (discoveredOperatorUrl && certNeedsRenewal(currentBundleInfo)) {
+            await maybeRenewUserCert(false);
           }
         })
         .catch(() => {});
@@ -367,6 +451,7 @@
     };
 
     ws.onclose = (ev) => {
+      const wasAuthed = wsAuthenticated;
       wsConnected = false;
       wsAuthenticated = false;
       if (heartbeatTimer) {
@@ -379,7 +464,11 @@
       );
       logEvent("warn", `WebSocket disconnected (code ${ev.code}).`);
       if (!manualDisconnect) {
-        scheduleReconnect();
+        if (!wasAuthed && discoveredOperatorUrl && currentBundleInfo && currentBundleInfo.has_user_cert) {
+          maybeRenewUserCert(true).finally(() => scheduleReconnect());
+        } else {
+          scheduleReconnect();
+        }
       }
     };
   }
