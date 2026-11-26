@@ -30,5 +30,5 @@ google.golang.org/grpc v1.85.0 h1:BPBCfuVRQ1qvBhKDOq9uvQllMvO59rKsYhXpp7Dd8vw=
 google.golang.org/grpc v1.85.0/go.mod h1:0rQrOD58yjal/0EaVbGBANindixsCZNQPDV3VKtaKuQ=
 google.golang.org/protobuf v1.36.12 h1:pJOKDDOyeXErUroCihFAd5LQuwXBSpVnKGrj5o/fwxc=
 google.golang.org/protobuf v1.36.12/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
-stingr.net/go/sshcast-proto v0.1.4 h1:liSNHbhMFv/iejavSJuXHgE+Jf8OBwaqIkifSoctixA=
-stingr.net/go/sshcast-proto v0.1.4/go.mod h1:xJRq2mOA1C98Wyn+Ab7xr51zBWHTXk47ECAXNBbPEJs=
+stingr.net/go/sshcast-proto v0.1.5 h1:71FPxNJbxxWwSl6ma6fWNtoXfUH91VV/CH30hjRVlsM=
+stingr.net/go/sshcast-proto v0.1.5/go.mod h1:wi0JFAIppV2EqlVuteoQnyEyRq9vtrLeSBbDrCT95qo=

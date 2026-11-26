@@ -1,6 +1,6 @@
 module stingr.net/go/sshcast-server
 
-go 1.27.3
+go 1.26.0
 
 require (
 	github.com/alecthomas/kong v1.17.0
@@ -10,7 +10,7 @@ require (
 	golang.org/x/net v0.60.0
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
-	stingr.net/go/sshcast-proto v0.1.4
+	stingr.net/go/sshcast-proto v0.1.5
 )
 
 require (
