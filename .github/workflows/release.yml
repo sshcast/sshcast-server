@@ -1,0 +1,108 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch_label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            nfpm_arch: amd64
+            arch_label: x86_64
+          - os: ubuntu-24.04-arm
+            nfpm_arch: arm64
+            arch_label: aarch64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.1
+
+      - name: Run tests
+        run: go test -race ./...
+
+      - name: Build release binary
+        run: go build -trimpath -ldflags="-s -w" -o sshcast-server ./cmd/sshcast-server
+
+      - name: Resolve package version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(grep -E '^Version:' sshcast-server.spec | awk '{print $2}')"
+          fi
+          echo "NFPM_VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Package .tar.gz, .deb, and .rpm
+        shell: bash
+        env:
+          NFPM_ARCH: ${{ matrix.nfpm_arch }}
+        run: |
+          mkdir -p dist-stage artifacts
+          cp sshcast-server dist-stage/
+          cp README.md LICENSE-MIT LICENSE-APACHE dist-stage/
+          cp -r systemd dist-stage/
+          tar -C dist-stage -czf "artifacts/sshcast-server-linux-${{ matrix.arch_label }}.tar.gz" .
+          nfpm package --config nfpm.yaml --packager deb --target artifacts/
+          nfpm package --config nfpm.yaml --packager rpm --target artifacts/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-assets-${{ matrix.arch_label }}
+          path: artifacts/*
+
+  release:
+    name: Release & Attest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        shell: bash
+        run: |
+          (cd release-assets && sha256sum -- * > ../SHA256SUMS.txt)
+          mv SHA256SUMS.txt release-assets/SHA256SUMS.txt
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-assets/*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true

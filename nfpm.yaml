@@ -1,0 +1,73 @@
+name: "sshcast-server"
+arch: "${NFPM_ARCH}"
+platform: "linux"
+version: "${NFPM_VERSION}"
+release: "1"
+section: "net"
+priority: "optional"
+maintainer: "Paul Komkoff <i@stingr.net>"
+description: |
+  Stateless Active-Active Coordinator Server for Sshcast Roaming SSH Agent
+  Sshcast Coordinator Server (sshcast-server) routes out-of-band SSH agent
+  identities and cryptographically signed SignRequests between remote Linux
+  hosts (sshcast-relay) and user workstations (sshcast-client) over HTTP/2
+  (h2c behind Nginx/Cloudflare or native TLS) with fast 1.5s SignAck failover.
+homepage: "https://github.com/sshcast/sshcast-server"
+license: "MIT OR Apache-2.0"
+
+depends:
+  - systemd
+
+contents:
+  - src: sshcast-server
+    dst: /usr/bin/sshcast-server
+    file_info:
+      mode: 0755
+
+  - src: systemd/sshcast-server.service
+    dst: /usr/lib/systemd/system/sshcast-server.service
+    file_info:
+      mode: 0644
+
+  - src: systemd/sshcast-server.socket
+    dst: /usr/lib/systemd/system/sshcast-server.socket
+    file_info:
+      mode: 0644
+
+  - src: systemd/sshcast-server-tcp@.socket
+    dst: /usr/lib/systemd/system/sshcast-server-tcp@.socket
+    file_info:
+      mode: 0644
+
+  - dst: /etc/sshcast
+    type: dir
+    file_info:
+      mode: 0755
+
+  - src: systemd/server.toml
+    dst: /etc/sshcast/server.toml
+    type: "config|noreplace"
+    file_info:
+      mode: 0644
+
+  - src: LICENSE-MIT
+    dst: /usr/share/licenses/sshcast-server/LICENSE-MIT
+    type: license
+    file_info:
+      mode: 0644
+
+  - src: LICENSE-APACHE
+    dst: /usr/share/licenses/sshcast-server/LICENSE-APACHE
+    type: license
+    file_info:
+      mode: 0644
+
+  - src: README.md
+    dst: /usr/share/doc/sshcast-server/README.md
+    type: doc
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: ./packaging/postinstall.sh
+  preremove: ./packaging/preremove.sh

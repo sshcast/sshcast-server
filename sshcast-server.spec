@@ -22,10 +22,20 @@ hosts (sshcast-relay) and user workstations (sshcast-client) over HTTP/2
 %autosetup -n %{name}-%{version}
 
 %build
-go build -mod=readonly -trimpath -ldflags="-s -w" -o sshcast-server ./cmd/sshcast-server
+export GOWORK=off
+GO_MOD_MODE="-mod=readonly"
+if [ -d vendor ]; then
+    GO_MOD_MODE="-mod=vendor"
+fi
+go build ${GO_MOD_MODE} -trimpath -ldflags="-s -w" -o sshcast-server ./cmd/sshcast-server
 
 %check
-go test -mod=readonly ./...
+export GOWORK=off
+GO_MOD_MODE="-mod=readonly"
+if [ -d vendor ]; then
+    GO_MOD_MODE="-mod=vendor"
+fi
+go test ${GO_MOD_MODE} ./...
 
 %install
 install -D -m 0755 sshcast-server %{buildroot}%{_bindir}/sshcast-server
