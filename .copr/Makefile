@@ -14,6 +14,7 @@ srpm:
 		dnf -y install golang git-core rpm-build; \
 	fi; \
 	SPEC="$(SPEC_ABS)"; \
+	if [ -z "$$SPEC" ] || [ -d "$$SPEC" ]; then SPEC="$(REPO_ROOT)/sshcast-server.spec"; fi; \
 	OUTDIR="$(OUTDIR_ABS)"; \
 	ROOT="$(REPO_ROOT)"; \
 	VER=$$(grep -E '^Version:' "$$SPEC" | awk '{print $$2}'); \
