@@ -28,6 +28,8 @@ type Config struct {
 	HeartbeatIntervalMs    uint64   `toml:"heartbeat_interval_ms" name:"heartbeat_interval_ms" aliases:"heartbeat-interval-ms" default:"25000" help:"Stream heartbeat interval in milliseconds."`
 	MaxClockSkewMs         uint64   `toml:"max_clock_skew_ms" name:"max_clock_skew_ms" aliases:"max-clock-skew-ms" default:"300000" help:"Maximum allowed clock skew in milliseconds."`
 	WebDir                 string   `toml:"web_dir" name:"web_dir" aliases:"web-dir" help:"Optional custom directory for /web/ static assets (e.g. custom sshcast_proto.wasm)."`
+	DefaultDomain          string   `toml:"default_domain" name:"default_domain" aliases:"default-domain" help:"Optional default swarm domain returned by /web/coordinators when no domain query parameter is specified."`
+	DefaultOperatorURL     string   `toml:"default_operator_url" name:"default_operator_url" aliases:"default-operator-url" help:"Optional default Operator URL fallback returned by /web/coordinators."`
 	MaxWorkstationsPerUser int      `toml:"max_workstations_per_user" name:"max_workstations_per_user" aliases:"max-workstations-per-user" default:"16" help:"Maximum concurrent workstation connections per user (0 disables cap)."`
 	MaxRelaysPerUser       int      `toml:"max_relays_per_user" name:"max_relays_per_user" aliases:"max-relays-per-user" default:"64" help:"Maximum concurrent relay connections per user (0 disables cap)."`
 	MaxPendingSignsPerUser int      `toml:"max_pending_signs_per_user" name:"max_pending_signs_per_user" aliases:"max-pending-signs-per-user" default:"16" help:"Maximum concurrent pending sign requests per user (0 disables cap)."`

@@ -25,24 +25,44 @@ func init() {
 
 // HandleCoordinators resolves _sshcast.<domain> DNS TXT coordinator records for the Browser Workstation UI.
 func HandleCoordinators(w http.ResponseWriter, r *http.Request) {
-	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
-	var disc dns.SwarmDiscovery
-	if domain != "" {
-		disc = dns.ResolveSwarmDiscovery(r.Context(), []string{domain})
+	HandleCoordinatorsWithDefaults("", "").ServeHTTP(w, r)
+}
+
+// HandleCoordinatorsWithDefaults resolves _sshcast.<domain> DNS TXT records, falling back
+// to defaultDomain and defaultOperatorURL when omitted by the request or DNS TXT records.
+func HandleCoordinatorsWithDefaults(defaultDomain, defaultOperatorURL string) http.HandlerFunc {
+	defDomain := strings.TrimSpace(defaultDomain)
+	defOpURL := strings.TrimSpace(defaultOperatorURL)
+	return func(w http.ResponseWriter, r *http.Request) {
+		domain := strings.TrimSpace(r.URL.Query().Get("domain"))
+		if domain == "" && defDomain != "" {
+			domain = defDomain
+		}
+		var disc dns.SwarmDiscovery
+		if domain != "" {
+			disc = dns.ResolveSwarmDiscovery(r.Context(), []string{domain})
+		}
+		if disc.OperatorURL == "" && defOpURL != "" {
+			disc.OperatorURL = defOpURL
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":             true,
+			"domain":         domain,
+			"default_domain": defDomain,
+			"servers":        disc.Servers,
+			"operator_url":   disc.OperatorURL,
+		})
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":           true,
-		"domain":       domain,
-		"servers":      disc.Servers,
-		"operator_url": disc.OperatorURL,
-	})
 }
 
 // HandleAssets returns an http.HandlerFunc serving the Browser Workstation Web App under /web/
 // using http.ServeFile (when overlaid by baseDir on disk) and http.ServeFileFS (from embed.FS).
 func HandleAssets(baseDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		rel := strings.TrimPrefix(r.URL.Path, "/web/")
 		if baseDir != "" {
 			diskPath := filepath.Join(baseDir, filepath.FromSlash(rel))

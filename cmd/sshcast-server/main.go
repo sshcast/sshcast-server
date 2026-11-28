@@ -99,7 +99,7 @@ func main() {
 		_, _ = fmt.Fprintln(w, "ok")
 	})
 	mux.Handle("/ws/workstation", sshcastSrv.WorkstationWebSocketHandler())
-	mux.HandleFunc("GET /web/coordinators", web.HandleCoordinators)
+	mux.HandleFunc("GET /web/coordinators", web.HandleCoordinatorsWithDefaults(cfg.DefaultDomain, cfg.DefaultOperatorURL))
 	mux.HandleFunc("GET /web/", web.HandleAssets(cfg.WebDir))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/web/", http.StatusFound)

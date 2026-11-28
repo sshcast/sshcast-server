@@ -40,8 +40,9 @@
     }
     .brand {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
     }
     .brand h1 {
       font-size: 18px;
@@ -76,8 +77,10 @@
     }
     .card-header {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
+      gap: 8px;
       margin-bottom: 14px;
       border-bottom: 1px solid var(--border);
       padding-bottom: 10px;
@@ -86,6 +89,12 @@
       font-size: 15px;
       margin: 0;
       font-weight: 600;
+    }
+    h3 {
+      font-size: 13.5px;
+      margin: 14px 0 8px;
+      font-weight: 600;
+      color: var(--text);
     }
     .badge {
       display: inline-block;
@@ -106,7 +115,7 @@
       color: var(--muted);
       margin-bottom: 5px;
     }
-    input[type="text"], input[type="password"], textarea {
+    input[type="text"], input[type="url"], input[type="number"], input[type="password"], select, textarea {
       width: 100%;
       background: var(--code-bg);
       color: var(--text);
@@ -117,7 +126,15 @@
       font-size: 12.5px;
       margin-bottom: 10px;
     }
-    textarea { resize: vertical; min-height: 76px; }
+    textarea { resize: vertical; min-height: 74px; }
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    @media (max-width: 600px) {
+      .form-grid { grid-template-columns: 1fr; }
+    }
     .row {
       display: flex;
       flex-wrap: wrap;
@@ -144,6 +161,11 @@
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
     }
     .btn:hover:not(:disabled) { background: #30363d; }
     .btn:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -165,6 +187,7 @@
       text-align: left;
       padding: 8px 10px;
       border-bottom: 1px solid var(--border);
+      vertical-align: middle;
     }
     th { color: var(--muted); font-weight: 600; font-size: 12px; }
     .empty-cell { color: var(--muted); font-style: italic; text-align: center; padding: 14px; }
@@ -174,9 +197,27 @@
       padding: 2px 6px;
       border-radius: 4px;
       font-size: 12px;
+      word-break: break-all;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      overflow-x: auto;
+      margin: 6px 0 10px;
+      font-size: 12px;
+    }
+    pre code {
+      background: transparent;
+      padding: 0;
+      word-break: normal;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
     .status-text { font-size: 12.5px; margin-top: 6px; color: var(--muted); }
     .text-ok { color: var(--ok-text); }
+    .text-warn { color: var(--warn-text); }
     .text-err { color: var(--err-text); }
     .muted { color: var(--muted); font-size: 12.5px; }
     .hidden { display: none !important; }
@@ -186,6 +227,33 @@
       background: rgba(187, 128, 9, 0.08);
       border-radius: 8px;
       padding: 16px;
+    }
+    .pairing-banner {
+      border: 2px solid var(--accent);
+      background: rgba(47, 129, 247, 0.08);
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 12px;
+    }
+    .sas-pill {
+      display: inline-block;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      padding: 6px 14px;
+      border-radius: 8px;
+      background: var(--code-bg);
+      border: 1px solid var(--accent);
+      color: var(--text);
+      margin: 6px 0;
+    }
+    .subpanel {
+      border: 1px solid var(--border);
+      background: rgba(1, 4, 9, 0.45);
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 12px;
     }
     .kv-grid {
       display: grid;
@@ -205,7 +273,7 @@
       background: var(--code-bg);
       border: 1px solid var(--border);
       border-radius: 6px;
-      height: 210px;
+      height: 220px;
       overflow-y: auto;
       padding: 8px 10px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -215,6 +283,49 @@
     .log-ok { color: var(--ok-text); }
     .log-warn { color: var(--warn-text); }
     .log-error { color: var(--err-text); }
+
+    details.disclosure {
+      margin-top: 14px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      background: rgba(1, 4, 9, 0.35);
+    }
+    details.disclosure > summary {
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    details.disclosure[open] > summary {
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    dialog {
+      background: var(--card-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      max-width: 520px;
+      width: calc(100% - 32px);
+      padding: 20px;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.65);
+    }
+    dialog::backdrop {
+      background: rgba(1, 4, 9, 0.78);
+      backdrop-filter: blur(2px);
+    }
+    dialog h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+    .divider {
+      border: 0;
+      border-top: 1px solid var(--border);
+      margin: 14px 0;
+    }
   </style>
 </head>
 <body>
@@ -234,11 +345,37 @@
         <input type="checkbox" id="sound-alert-chk" checked />
         Audio Chime
       </label>
-      <button id="btn-enable-notifications" class="btn btn-sm">Enable Desktop Notifications</button>
+      <button id="btn-enable-notifications" type="button" class="btn btn-sm">Enable Desktop Notifications</button>
     </div>
   </header>
 
   <main>
+    <!-- Incoming Device Pairing Approval Banner (Approver Side, Full Width) -->
+    <section id="pairing-approver-card" class="card full-width approval-banner hidden" aria-live="polite">
+      <div class="card-header" style="border-bottom-color: rgba(47,129,247,0.35);">
+        <h2>New Device Pairing Request</h2>
+        <span id="approver-pairing-id-badge" class="badge badge-warn"></span>
+      </div>
+      <div class="kv-grid">
+        <div class="kv-key">Requesting Device:</div>
+        <div class="kv-val" id="approver-req-node"></div>
+        <div class="kv-key">Operating System:</div>
+        <div class="kv-val" id="approver-req-os"></div>
+        <div class="kv-key">GitHub Account:</div>
+        <div class="kv-val" id="approver-req-gh"></div>
+        <div class="kv-key">Verification Code:</div>
+        <div class="kv-val"><span id="approver-req-sas" class="sas-pill"></span></div>
+      </div>
+      <p class="muted" style="margin-bottom: 10px;">
+        Confirm that the 6-digit verification code above matches the code displayed on the new device before approving.
+      </p>
+      <div class="row">
+        <button id="btn-approve-pairing" type="button" class="btn btn-success">Approve Pairing</button>
+        <button id="btn-deny-pairing" type="button" class="btn btn-danger">Deny</button>
+      </div>
+      <div id="approver-pairing-status" class="status-text"></div>
+    </section>
+
     <!-- Live SSH Signing Approval Card (Full Width) -->
     <section class="card full-width">
       <div class="card-header">
@@ -252,7 +389,7 @@
 
       <div id="sign-approval-card" class="approval-banner hidden">
         <div id="req-missing-key-warn" class="status-text text-err hidden" style="margin-bottom: 10px; font-weight: 600;">
-          ⚠️ The requested SSH public key is not currently loaded in the Browser WASM Agent. Load the matching private key below or deny this request.
+          The requested SSH public key is not currently loaded in the Browser WASM Agent. Load or generate the matching private key below or deny this request.
         </div>
         <div class="kv-grid">
           <div class="kv-key">Verified Source Host:</div>
@@ -275,10 +412,10 @@
           <div class="kv-val" id="req-id"></div>
         </div>
         <div class="row">
-          <button id="btn-approve-once" class="btn btn-success">Approve Once</button>
-          <button id="btn-approve-tool-15m" class="btn btn-primary">Approve Tool (15m)</button>
-          <button id="btn-approve-host-15m" class="btn">Approve ALL on Host (15m)</button>
-          <button id="btn-deny-req" class="btn btn-danger">Deny</button>
+          <button id="btn-approve-once" type="button" class="btn btn-success">Approve Once</button>
+          <button id="btn-approve-tool-15m" type="button" class="btn btn-primary">Approve Tool (15m)</button>
+          <button id="btn-approve-host-15m" type="button" class="btn">Approve ALL on Host (15m)</button>
+          <button id="btn-deny-req" type="button" class="btn btn-danger">Deny</button>
         </div>
       </div>
 
@@ -300,32 +437,118 @@
       </div>
     </section>
 
-    <!-- Enrollment Bundle & WebSocket Connection -->
+    <!-- Card 1: GitHub Sign-In, Device Pairing & Manual Bundle -->
     <section class="card">
       <div class="card-header">
-        <h2>1. Client Enrollment Bundle &amp; Coordinator</h2>
+        <h2>1. Sign In &amp; Workstation Enrollment</h2>
+        <span id="root-key-badge" class="badge badge-neutral">Not Signed In</span>
       </div>
-      <label for="bundle-input">Client Enrollment Bundle (<code>sc1_...</code>)</label>
-      <textarea id="bundle-input" placeholder="Paste your sc1_... client enrollment bundle here"></textarea>
 
-      <label for="ws-url-input">Coordinator WebSocket Endpoint (<code>wss://.../ws/workstation</code>)</label>
-      <input type="text" id="ws-url-input" placeholder="wss://coordinator.example.com/ws/workstation" />
-
-      <div class="row" style="justify-content: space-between;">
-        <label class="checkbox-label">
-          <input type="checkbox" id="remember-session-chk" />
-          Keep bundle in tab sessionStorage
-        </label>
-        <div class="row" style="margin-top: 0;">
-          <button id="btn-clear-storage" class="btn btn-sm">Clear Saved</button>
-          <button id="btn-disconnect" class="btn">Disconnect</button>
-          <button id="btn-connect" class="btn btn-primary">Connect Workstation</button>
+      <div id="identity-summary-box" class="subpanel hidden" style="margin-top: 0; margin-bottom: 12px;">
+        <div class="kv-grid" style="margin-bottom: 4px;">
+          <div class="kv-key">User ID:</div>
+          <div class="kv-val" id="id-user-id"></div>
+          <div class="kv-key">User Pubkey:</div>
+          <div class="kv-val" id="id-user-pubkey"></div>
+          <div class="kv-key">Workstation Node:</div>
+          <div class="kv-val" id="id-node-id"></div>
+          <div class="kv-key">Root Key Status:</div>
+          <div class="kv-val" id="id-root-key-state"></div>
         </div>
       </div>
-      <div id="bundle-status" class="status-text"></div>
+
+      <form id="github-enroll-form">
+        <div class="form-grid">
+          <div>
+            <label for="enroll-node-input">Workstation Name</label>
+            <input type="text" id="enroll-node-input" value="browser-workstation" autocomplete="off" />
+          </div>
+          <div>
+            <label for="enroll-domain-input">Swarm Domain (<code>_sshcast.&lt;domain&gt;</code>)</label>
+            <input type="text" id="enroll-domain-input" placeholder="sshcast.net" autocomplete="off" />
+          </div>
+        </div>
+        <label for="enroll-operator-input">Operator URL (auto-discovered via DNS TXT or override)</label>
+        <input type="url" id="enroll-operator-input" placeholder="https://op.sshcast.net" autocomplete="off" />
+
+        <div class="row">
+          <button id="btn-github-login" type="submit" class="btn btn-primary">Sign in with GitHub</button>
+          <button id="btn-sign-out" type="button" class="btn btn-danger hidden">Sign Out / Clear Memory</button>
+        </div>
+      </form>
+
+      <div id="enroll-progress-box" class="subpanel hidden" aria-live="polite">
+        <div id="enroll-progress-text" class="status-text" style="margin-top: 0;"></div>
+        <div class="row" style="margin-top: 8px;">
+          <a id="enroll-auth-link" class="btn btn-sm btn-primary hidden" href="#" target="_blank" rel="noopener noreferrer">Open GitHub Sign-In</a>
+          <button id="btn-cancel-enroll" type="button" class="btn btn-sm">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Existing-Account Pairing / Recovery Unlock / Lost-Key Reset -->
+      <div id="pairing-required-box" class="pairing-banner hidden" aria-live="polite">
+        <div style="font-weight: 600; margin-bottom: 4px;">Existing Sshcast Account Detected</div>
+        <div id="pairing-account-info" class="muted" style="margin-bottom: 8px;"></div>
+        <div>
+          <label>Verification Code (SAS)</label>
+          <div id="pairing-sas-code" class="sas-pill">---</div>
+        </div>
+        <p class="muted" style="margin-top: 6px; margin-bottom: 10px;">
+          Approve this request on an existing Sshcast workstation showing the matching code, or unlock below:
+        </p>
+
+        <div id="unlock-vault-section" class="subpanel hidden" style="margin-top: 8px;">
+          <form id="unlock-vault-form">
+            <label for="unlock-passphrase-input">Unlock with Recovery Passphrase</label>
+            <div class="row" style="margin-top: 0;">
+              <input type="password" id="unlock-passphrase-input" autocomplete="current-password" placeholder="Enter recovery passphrase" style="flex: 1; margin-bottom: 0;" />
+              <button id="btn-unlock-vault" type="submit" class="btn btn-success">Unlock</button>
+            </div>
+          </form>
+          <div id="unlock-vault-status" class="status-text"></div>
+        </div>
+
+        <div class="row" style="margin-top: 10px; justify-content: space-between;">
+          <span class="muted">Lost all old devices and forgot passphrase?</span>
+          <button id="btn-open-reset-dialog" type="button" class="btn btn-sm btn-danger">Reset Account &amp; Replace Root Key</button>
+        </div>
+      </div>
+
+      <details id="manual-bundle-details" class="disclosure">
+        <summary>Manual Enrollment Bundle (<code>sc1_...</code>) &amp; Root Key (<code>scu1_...</code>)</summary>
+
+        <label for="bundle-input">Client Enrollment Bundle (<code>sc1_...</code>)</label>
+        <textarea id="bundle-input" placeholder="Paste your sc1_... client enrollment bundle here"></textarea>
+
+        <label for="ws-url-input">Coordinator WebSocket Endpoint (<code>wss://.../ws/workstation</code>)</label>
+        <input type="text" id="ws-url-input" placeholder="wss://c1.sshcast.net/ws/workstation" />
+
+        <div class="row" style="justify-content: space-between;">
+          <label class="checkbox-label" title="Your User Root key always stays in WASM memory only and is never written to Web Storage.">
+            <input type="checkbox" id="remember-session-chk" />
+            Keep node bundle in tab sessionStorage
+          </label>
+          <div class="row" style="margin-top: 0;">
+            <button id="btn-clear-storage" type="button" class="btn btn-sm">Clear Saved</button>
+            <button id="btn-disconnect" type="button" class="btn">Disconnect</button>
+            <button id="btn-connect" type="button" class="btn btn-primary">Connect Workstation</button>
+          </div>
+        </div>
+        <div id="bundle-status" class="status-text"></div>
+
+        <hr class="divider" />
+
+        <label for="root-key-import-input">Import User Root Key Token (<code>scu1_...</code>, held in WASM memory only)</label>
+        <div class="row" style="margin-top: 0;">
+          <input type="password" id="root-key-import-input" autocomplete="off" placeholder="scu1_..." style="flex: 1; margin-bottom: 0;" />
+          <button id="btn-import-root-key" type="button" class="btn">Import Root Key</button>
+          <button id="btn-export-root-key" type="button" class="btn" disabled>Export <code>scu1_</code></button>
+        </div>
+        <div id="root-key-status" class="status-text"></div>
+      </details>
     </section>
 
-    <!-- Built-in WASM SSH Agent Key Ring -->
+    <!-- Card 2: Built-in WASM SSH Agent Key Ring -->
     <section class="card">
       <div class="card-header">
         <h2>2. Built-in WASM SSH Agent Key Ring</h2>
@@ -338,32 +561,125 @@
             <th>Type</th>
             <th>Fingerprint</th>
             <th>Comment</th>
-            <th>Action</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody id="keys-tbody">
-          <tr><td colspan="4" class="empty-cell">No SSH keys loaded in browser WASM agent yet. Load an OpenSSH private key below.</td></tr>
+          <tr><td colspan="4" class="empty-cell">No SSH keys loaded in browser WASM agent yet. Generate or import a key below.</td></tr>
         </tbody>
       </table>
 
+      <div class="subpanel" style="margin-top: 0; margin-bottom: 12px;">
+        <label for="gen-key-comment-input">Generate Ephemeral <code>ssh-ed25519</code> Key (in WASM memory)</label>
+        <div class="row" style="margin-top: 0;">
+          <input type="text" id="gen-key-comment-input" value="browser-ephemeral" autocomplete="off" style="flex: 1; margin-bottom: 0;" />
+          <button id="btn-generate-ssh-key" type="button" class="btn btn-primary">Generate Ephemeral Key</button>
+        </div>
+        <div id="gen-key-output" class="hidden" style="margin-top: 8px;">
+          <label>Public Key (<code>authorized_keys</code>)</label>
+          <pre tabindex="0" role="region" aria-label="Generated SSH public key"><code id="gen-key-pub-line"></code></pre>
+          <button id="btn-copy-gen-pubkey" type="button" class="btn btn-sm">Copy Public Key</button>
+        </div>
+      </div>
+
       <div class="row" style="margin-bottom: 8px; justify-content: space-between;">
-        <label for="ssh-key-pem-input" style="margin: 0;">Add SSH Private Key (<code>ssh-ed25519</code> or <code>ssh-rsa</code>, OpenSSH or RSA PEM)</label>
+        <label for="ssh-key-pem-input" style="margin: 0;">Import SSH Private Key (<code>ssh-ed25519</code> or <code>ssh-rsa</code>, OpenSSH or RSA PEM)</label>
         <input type="file" id="ssh-key-file-input" style="font-size: 12px; max-width: 230px;" />
       </div>
       <textarea id="ssh-key-pem-input" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
 
       <div class="row">
-        <input type="password" id="ssh-key-passphrase-input" placeholder="Passphrase (leave empty if unencrypted)" style="flex: 1; margin-bottom: 0;" />
-        <button id="btn-add-ssh-key" class="btn btn-primary">Load Key into WASM Agent</button>
+        <input type="password" id="ssh-key-passphrase-input" autocomplete="off" placeholder="Passphrase (leave empty if unencrypted)" style="flex: 1; margin-bottom: 0;" />
+        <button id="btn-add-ssh-key" type="button" class="btn btn-primary">Load Key into WASM Agent</button>
       </div>
       <div id="key-add-status" class="status-text"></div>
     </section>
 
-    <!-- Discovered Relay Hosts -->
+    <!-- Card 3: Recovery Passphrase & Node Bundle Minting -->
     <section class="card">
       <div class="card-header">
-        <h2>Online Relay Hosts &amp; Zellij Sessions</h2>
-        <button id="btn-refresh-zellij" class="btn btn-sm">Refresh Hosts</button>
+        <h2>3. Recovery Passphrase &amp; Node Grants</h2>
+        <span id="vault-badge" class="badge badge-neutral">Unavailable</span>
+      </div>
+
+      <p id="root-key-required-hint" class="muted" style="margin-top: 0;">
+        Sign in with GitHub or import a <code>scu1_...</code> / <code>.rk_</code> root key to manage your encrypted recovery vault or mint enrollment bundles for relays and other devices.
+      </p>
+
+      <div id="recovery-vault-section">
+        <h3 style="margin-top: 4px;">Recovery Passphrase Vault</h3>
+        <div id="vault-status-text" class="status-text" style="margin-bottom: 8px;">Not checked yet.</div>
+        <form id="set-vault-form">
+          <div class="form-grid">
+            <div>
+              <label for="vault-pass-1">New Recovery Passphrase (min 8 chars)</label>
+              <input type="password" id="vault-pass-1" autocomplete="new-password" minlength="8" placeholder="At least 8 characters" />
+            </div>
+            <div>
+              <label for="vault-pass-2">Confirm Passphrase</label>
+              <input type="password" id="vault-pass-2" autocomplete="new-password" minlength="8" placeholder="Re-enter passphrase" />
+            </div>
+          </div>
+          <div class="row" style="margin-top: 0;">
+            <button id="btn-set-vault" type="submit" class="btn btn-primary" disabled>Set / Rotate Passphrase</button>
+            <button id="btn-remove-vault" type="button" class="btn btn-danger" disabled>Remove Vault</button>
+          </div>
+        </form>
+        <div id="vault-action-status" class="status-text"></div>
+      </div>
+
+      <hr class="divider" />
+
+      <div id="mint-bundle-section">
+        <h3 style="margin-top: 0;">Mint Relay or Client Enrollment Bundle</h3>
+        <form id="mint-bundle-form">
+          <div class="form-grid">
+            <div>
+              <label for="mint-node-input">Target Node Name</label>
+              <input type="text" id="mint-node-input" placeholder="e.g. prod-bastion.local" autocomplete="off" />
+            </div>
+            <div>
+              <label for="mint-role-select">Node Role</label>
+              <select id="mint-role-select">
+                <option value="RELAY">RELAY (sshcast-relay)</option>
+                <option value="CLIENT">CLIENT (workstation)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-grid">
+            <div>
+              <label for="mint-expires-input">Expiration Days (0 = never)</label>
+              <input type="number" id="mint-expires-input" min="0" value="0" />
+            </div>
+            <div style="display: flex; align-items: center; padding-top: 14px;">
+              <label class="checkbox-label">
+                <input type="checkbox" id="mint-include-rk-chk" disabled />
+                Include root key (<code>.rk_</code>, client only)
+              </label>
+            </div>
+          </div>
+          <div class="row" style="margin-top: 0;">
+            <button id="btn-mint-bundle" type="submit" class="btn btn-primary" disabled>Generate Enrollment Bundle</button>
+          </div>
+        </form>
+        <div id="mint-status" class="status-text"></div>
+
+        <div id="mint-output-box" class="subpanel hidden">
+          <label>Init Command</label>
+          <pre tabindex="0" role="region" aria-label="Node initialization command"><code id="mint-command-out"></code></pre>
+          <div class="row" style="margin-top: 0;">
+            <button id="btn-copy-mint-cmd" type="button" class="btn btn-sm btn-primary">Copy Command</button>
+            <button id="btn-copy-mint-token" type="button" class="btn btn-sm">Copy <code>sc1_</code> Token Only</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Card 4: Discovered Relay Hosts -->
+    <section class="card">
+      <div class="card-header">
+        <h2>4. Online Relay Hosts &amp; Zellij Sessions</h2>
+        <button id="btn-refresh-zellij" type="button" class="btn btn-sm">Refresh Hosts</button>
       </div>
       <table>
         <thead>
@@ -379,14 +695,46 @@
       </table>
     </section>
 
-    <!-- Activity Log -->
-    <section class="card">
+    <!-- Activity Log (Full Width) -->
+    <section class="card full-width">
       <div class="card-header">
         <h2>Workstation Event Log</h2>
       </div>
       <div id="event-log" class="log-box"></div>
     </section>
   </main>
+
+  <!-- Modal: Confirm Lost-Key Account Reset -->
+  <dialog id="dialog-reset-root-key" aria-labelledby="dialog-reset-title">
+    <h2 id="dialog-reset-title">Replace Lost Sshcast Root Key?</h2>
+    <p class="muted">
+      Resetting your account replaces your registered root Ed25519 key on the Operator with the new key generated in this browser session.
+      Existing workstations and remote relays tied to your old root key will stop renewing and any existing recovery vault will be removed.
+    </p>
+    <form id="reset-root-key-form">
+      <label for="reset-confirm-input">Type <code>RESET</code> to confirm</label>
+      <input type="text" id="reset-confirm-input" autocomplete="off" placeholder="RESET" />
+      <div id="reset-dialog-status" class="status-text"></div>
+      <div class="row" style="justify-content: flex-end; margin-top: 12px;">
+        <button id="btn-close-reset-dialog" type="button" class="btn">Cancel</button>
+        <button id="btn-confirm-reset-root-key" type="submit" class="btn btn-danger">Replace Root Key</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Modal: Export User Root Key (scu1_) -->
+  <dialog id="dialog-export-root-key" aria-labelledby="dialog-export-title">
+    <h2 id="dialog-export-title">Export User Root Key (<code>scu1_</code>)</h2>
+    <p class="muted">
+      Anyone with this token controls your Sshcast account identity and can authorize new workstations and relays.
+      Never paste it into untrusted websites or shared logs.
+    </p>
+    <pre tabindex="0" role="region" aria-label="Exported user root key token"><code id="export-root-key-token"></code></pre>
+    <div class="row" style="justify-content: flex-end;">
+      <button id="btn-copy-exported-rk" type="button" class="btn btn-primary">Copy Token</button>
+      <button id="btn-close-export-dialog" type="button" class="btn">Close</button>
+    </div>
+  </dialog>
 
   <script src="./app.js"></script>
 </body>
